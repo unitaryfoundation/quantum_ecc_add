@@ -1,12 +1,27 @@
 Third-party attribution for files reused under CC BY 4.0
 =========================================================
 
-This project reuses the following files verbatim (unmodified) from the
-`zkp_ecc` project published on Zenodo:
+This project reuses files from the `zkp_ecc` project published on Zenodo.
+
+Reused verbatim (unmodified):
 
     src/circuit.rs                     (from lib/src/circuit.rs)
-    src/sim.rs                         (from lib/src/sim.rs)
     src/weierstrass_elliptic_curve.rs  (from lib/src/weierstrass_elliptic_curve.rs)
+
+Reused with modifications (derived work under CC BY 4.0):
+
+    src/sim.rs                         (from lib/src/sim.rs)
+        Modified the `R` (free / measure-and-reset) op handler to ASSERT
+        that its target qubit is |0⟩ across all live shots before zeroing,
+        and to return `Result<(), String>` from `apply` / `apply_iter` /
+        `apply_archived` so the caller can surface assertion failures.
+        The upstream version unconditionally zeros the target, which
+        permits "dirty free" of an ancilla as a silent reversibility bug.
+        This research project enforces strict reversibility, so R is
+        promoted to a hard correctness check at the simulator level.
+        The change is purely defensive — when the input circuit is
+        already clean, the modified sim produces identical results to
+        the upstream version.
 
 Upstream project:
     "Zero-Knowledge Proofs for Quantum Elliptic Curve Cryptography (ZKP ECC)"

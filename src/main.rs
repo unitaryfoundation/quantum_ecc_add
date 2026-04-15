@@ -105,45 +105,6 @@ fn invert_ops(ops: &[Op]) -> Vec<Op> {
     out
 }
 
-/// Apply `ops` to `sim` while enforcing that every `R` op targets a qubit
-/// whose value is 0 on every live shot. This turns `R` back into a
-/// reversibility assertion (the `Builder::assert_zero_and_free` contract) rather
-/// than a free "forget this ancilla" primitive that happens to work
-/// because the sim zeros unconditionally.
-///
-/// `push_condition` / `pop_condition` are not used in our circuit, so
-/// we check the raw qubit value across all 64 shots. If ever needed,
-/// this would need to thread the live-condition mask.
-fn strict_apply<'a, R: sha3::digest::XofReader>(
-    sim: &mut Simulator<'a, R>,
-    ops: &[Op],
-) -> Result<(), String> {
-    let mut start = 0usize;
-    for (i, op) in ops.iter().enumerate() {
-        if op.kind == OperationType::R {
-            if start < i {
-                sim.apply(&ops[start..i]);
-            }
-            let v = sim.qubit(op.q_target);
-            if v != 0 {
-                return Err(format!(
-                    "REVERSIBILITY VIOLATION at op #{i}: R targets qubit {:?} \
-                     but its value across 64 shots is {v:#018x} (nonzero). \
-                     Builder::assert_zero_and_free requires the ancilla to already be |0⟩ — \
-                     proper reversible uncomputation is missing.",
-                    op.q_target
-                ));
-            }
-            sim.apply(std::slice::from_ref(op));
-            start = i + 1;
-        }
-    }
-    if start < ops.len() {
-        sim.apply(&ops[start..]);
-    }
-    Ok(())
-}
-
 fn run_tests(ops: &[Op], layout_regs: &[Vec<QubitOrBit>], total_qubits: u32, num_bits: u32)
     -> (bool, f64, f64, u64, u64, usize, Option<String>)
 {
@@ -207,7 +168,10 @@ fn run_tests(ops: &[Op], layout_regs: &[Vec<QubitOrBit>], total_qubits: u32, num
             .map(|q| sim.qubit(circuit::QubitId(q)))
             .collect();
 
-        if let Err(e) = strict_apply(&mut sim, ops) {
+        // Forward pass. `sim.apply` enforces the R-as-assertion contract
+        // internally (modified `sim.rs`), so a dirty ancilla free is caught
+        // here as an Err.
+        if let Err(e) = sim.apply(ops) {
             eprintln!("\n!! {e}");
             return (false, 0.0, 0.0, 0, 0, n, Some(e));
         }
@@ -232,7 +196,12 @@ fn run_tests(ops: &[Op], layout_regs: &[Vec<QubitOrBit>], total_qubits: u32, num
         // catches any form of information loss (dirty R, bad uncompute,
         // missing inverse, etc.) regardless of whether the forward
         // result happened to look right.
-        sim.apply(&inv_ops);
+        if let Err(e) = sim.apply(&inv_ops) {
+            eprintln!("\n!! reverse pass: {e}");
+            if fail_reason.is_none() { fail_reason = Some(e); }
+            ok = false;
+            break;
+        }
         for q in 0..total_qubits {
             let before = snapshot[q as usize];
             let after = sim.qubit(circuit::QubitId(q));

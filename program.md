@@ -68,8 +68,6 @@ reject. Spend your effort finding genuinely better algorithms (see seeds).
 ### Tie-breakers (when Toffoli counts are within ~0.5%)
 - Lower peak qubits.
 - Lower total Clifford.
-- Simpler code. A 0.1% Toffoli win that adds 200 lines of hacky code is
-  worse than keeping the baseline.
 
 ## Baseline (starting point, commit `main`)
 

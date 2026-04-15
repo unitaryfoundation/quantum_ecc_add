@@ -78,22 +78,30 @@ impl<'a, R: sha3::digest::XofReader> Simulator<'a, R> {
         self.phase = 0;
     }
 
-    pub fn apply_archived(&mut self, ops: &[rkyv::Archived<Op>]) {
+    pub fn apply_archived(&mut self, ops: &[rkyv::Archived<Op>]) -> Result<(), String> {
         self.apply_iter(ops.iter().map(|op| {
             rkyv::deserialize::<Op, rkyv::rancor::Infallible>(op).unwrap()
-        }));
+        }))
     }
 
-    pub fn apply(&mut self, ops: &[Op]) {
-        self.apply_iter(ops.iter().copied());
+    pub fn apply(&mut self, ops: &[Op]) -> Result<(), String> {
+        self.apply_iter(ops.iter().copied())
     }
 
-    pub fn apply_iter(&mut self, ops: impl Iterator<Item = Op>) {
+    /// Run an op stream against the simulator state.
+    ///
+    /// MODIFIED FROM UPSTREAM ZENODO `sim.rs`: the `R` (free / measure-and-
+    /// reset) op now ASSERTS that its target qubit is |0⟩ across all live
+    /// shots before zeroing it. In the upstream version, R unconditionally
+    /// zeros, which makes "dirty free" of an ancilla a silent bug. Our
+    /// research loop requires reversibility, so we promote R to a hard
+    /// assertion at the simulator level. See NOTICE for attribution.
+    pub fn apply_iter(&mut self, ops: impl Iterator<Item = Op>) -> Result<(), String> {
 
         let mut condition_stack = Vec::new();
         let mut current_base_condition = u64::MAX;
 
-        for op in ops {
+        for (op_idx, op) in ops.enumerate() {
             let mut cond = current_base_condition;
             if op.c_condition != NO_BIT {
                 cond &= self.bit(op.c_condition);
@@ -168,6 +176,28 @@ impl<'a, R: sha3::digest::XofReader> Simulator<'a, R> {
                     *self.qubit_mut(op.q_target) = 0;
                 }
                 OperationType::R => {
+                    // ASSERT FIRST: the target qubit must be |0⟩ across all
+                    // live shots. This promotes R from upstream's
+                    // "measurement+reset" to a hard reversibility check.
+                    // Under this regime the upstream measurement-randomness
+                    // branch is unreachable (it only fires when the qubit is
+                    // |1⟩ on some shot, which we now reject).
+                    let live_value = self.qubit(op.q_target) & cond;
+                    if live_value != 0 {
+                        return Err(format!(
+                            "REVERSIBILITY VIOLATION at op #{op_idx}: R targets qubit \
+                             {:?} but its value across {} live shots is {:#018x} (nonzero). \
+                             A clean reversible circuit must uncompute every ancilla to |0⟩ \
+                             before freeing it.",
+                            op.q_target,
+                            cond.count_ones(),
+                            live_value,
+                        ));
+                    }
+
+                    // Below this line: original upstream R semantics, kept
+                    // verbatim so that the byte stream + global phase
+                    // evolution matches upstream for any clean circuit.
                     let mut buf = [0u8; 8];
                     self.xof.read(&mut buf);
                     let rng_val = u64::from_le_bytes(buf);
@@ -199,6 +229,7 @@ impl<'a, R: sha3::digest::XofReader> Simulator<'a, R> {
             }
         }
 
+        Ok(())
     }
 
     pub fn set_register(

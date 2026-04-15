@@ -808,6 +808,45 @@ fn with_gt<F: FnOnce(&mut Builder)>(
     with_lt(b, v, u, flag, body)
 }
 
+/// Run `body` with `flag` holding (v == 0), then uncompute. Single forward
+/// OR chain + body + single inverse OR chain — half the cost of two
+/// `cmp_eq_zero_into` calls.
+fn with_eq_zero<F: FnOnce(&mut Builder)>(
+    b: &mut Builder,
+    v: &[QubitId],
+    flag: QubitId,
+    body: F,
+) {
+    let n = v.len();
+    assert!(n > 0);
+    if n == 1 {
+        b.x(v[0]);
+        b.cx(v[0], flag);
+        body(b);
+        b.cx(v[0], flag);
+        b.x(v[0]);
+        return;
+    }
+    let or_chain: Vec<QubitId> = b.alloc_qubits(n - 1);
+    or_step(b, v[0], v[1], or_chain[0]);
+    for i in 1..n - 1 {
+        or_step(b, or_chain[i - 1], v[i + 1], or_chain[i]);
+    }
+    // or_chain[n-2] = (v != 0). Take complement for "== 0".
+    b.x(or_chain[n - 2]);
+    b.cx(or_chain[n - 2], flag);
+    b.x(or_chain[n - 2]);
+    body(b);
+    b.x(or_chain[n - 2]);
+    b.cx(or_chain[n - 2], flag);
+    b.x(or_chain[n - 2]);
+    for i in (1..n - 1).rev() {
+        or_step(b, or_chain[i - 1], v[i + 1], or_chain[i]);
+    }
+    or_step(b, v[0], v[1], or_chain[0]);
+    b.assert_zero_and_free_vec(&or_chain);
+}
+
 /// flag ^= (u < v).  Non-destructive on u and v.
 ///
 /// Uses a MAJ-only carry chain instead of the full sub+add pattern.
@@ -1088,12 +1127,9 @@ fn kaliski_iteration(
 
     // ─── STEP 0: is_zero = (v_w == 0);  m[i] ^= (f AND is_zero);  f ^= m[i] ───
     let is_zero = b.alloc_qubit();
-    // compute is_zero ^= (v_w == 0)
-    cmp_eq_zero_into(b, v_w, is_zero);
-    b.ccx(f, is_zero, m_i);
-    // uncompute is_zero (run the same function; cmp_eq_zero is self-inverse
-    // as a gate sequence because each step is involutive).
-    cmp_eq_zero_into(b, v_w, is_zero);
+    with_eq_zero(b, v_w, is_zero, |b| {
+        b.ccx(f, is_zero, m_i);
+    });
     b.assert_zero_and_free(is_zero);
     b.cx(m_i, f);
 

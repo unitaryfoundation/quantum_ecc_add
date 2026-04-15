@@ -2,3 +2,4 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1776219465	135de21	101284162.000	211257273.000	3595	383933667	OK	baseline
 1776219642	135de21	98893282.000	201627097.000	3339	368397635	OK	mod_sub_qq = gate-inverse of mod_add_qq
 1776219783	dad5057	98887162.000	201606745.000	3339	368360939	OK	mod_sub_qb = gate-inverse of mod_add_qb
+1776220054	bbf01ea	77082106.000	156548907.000	3339	285909913	OK	fold pair-1 kaliski: kal_compute_into + emit_inverse

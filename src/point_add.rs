@@ -1273,6 +1273,28 @@ fn kaliski_forward(b: &mut Builder, v_in: &[QubitId], st: &KaliskiState, p: U256
     add_nbit_const(b, &st.r, p.wrapping_add(U256::from(1)));
 }
 
+/// Compute `output ^= v_in^{-1} mod p` without mutating `v_in`. `st` and
+/// `output` are caller-provided scratch (both |0⟩ on entry) and are left
+/// in their algorithm-intermediate state: `st` returns to |0⟩, `output`
+/// holds the inverse. The caller uncomputes `output` by running this
+/// same function under `emit_inverse`.
+fn kal_compute_into(
+    b: &mut Builder,
+    v_in: &[QubitId],
+    output: &[QubitId],
+    st: &KaliskiState,
+    p: U256,
+) {
+    let n = v_in.len();
+    let two_2n = pow_mod_2_k(p, 2 * n);
+    let k_const = classical_modinv(two_2n, p);
+    kaliski_forward(b, v_in, st, p);
+    in_place_mul_const(b, &st.r[..n], k_const, p);
+    for i in 0..n { b.cx(st.r[i], output[i]); }
+    in_place_mul_const(b, &st.r[..n], two_2n, p);
+    emit_inverse(b, |b| kaliski_forward(b, v_in, st, p));
+}
+
 fn kaliski_inv_inplace(b: &mut Builder, v_in: &[QubitId], p: U256) {
     let n = v_in.len();
 
@@ -1360,10 +1382,20 @@ pub fn build(b: &mut Builder) -> Layout {
 
     let lam = b.alloc_qubits(N);
 
-    kaliski_inv_inplace(b, &tx, p);              // Px ← dx^{-1}
-    mod_mul_add_qq(b, &lam, &ty, &tx, p);        // lam += dy · dx^{-1} = λ
-    kaliski_inv_inplace(b, &tx, p);              // Px ← dx
-    mod_mul_sub_qq(b, &ty, &lam, &tx, p);        // Py -= λ·dx = 0
+    // Pair 1 (folded): keep tx holding dx throughout, compute dx^{-1} into
+    // `inv` ancilla, use it, then uncompute. Replaces two kaliski_inv_inplace
+    // involutions (≈4 Bennett passes) with one kal_compute_into and its
+    // emit_inverse (≈2 Bennett passes).
+    {
+        let st1 = alloc_kaliski_state(b, N);
+        let inv = b.alloc_qubits(N);
+        kal_compute_into(b, &tx, &inv, &st1, p);     // inv = dx^{-1}
+        mod_mul_add_qq(b, &lam, &ty, &inv, p);       // lam += dy · dx^{-1} = λ
+        mod_mul_sub_qq(b, &ty, &lam, &tx, p);        // Py -= λ·dx = 0
+        emit_inverse(b, |b| kal_compute_into(b, &tx, &inv, &st1, p));
+        b.assert_zero_and_free_vec(&inv);
+        free_kaliski_state(b, st1);
+    }
 
     // Px := λ² - Px_orig - Qx
     mod_mul_sub_qq(b, &tx, &lam, &lam, p);

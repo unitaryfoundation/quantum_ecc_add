@@ -1520,21 +1520,16 @@ pub fn build(b: &mut Builder) -> Layout {
         for i in 0..N { b.x_if(dxr[i], ox[i]); }     // dxr = 0
         b.assert_zero_and_free_vec(&dxr);
     }
-    mod_sub_qb(b, &ty, &oy, p);
-
-    // Uncompute lam. Use (Rx - Qx) as kaliski input (instead of Qx - Rx)
-    // to avoid two mod_neg_inplace calls. The kaliski inverse of (Rx - Qx)
-    // is -(Qx - Rx)^{-1} mod p, so the body's mul_sub becomes a mul_add to
-    // keep the sign convention: lam += (Rx-Qx)^{-1} · (Ry + Qy) zeros lam
-    // because λ = (Ry+Qy)/(Qx-Rx) = -(Ry+Qy)/(Rx-Qx) = -inv·(Ry+Qy).
+    // Defer `ty -= Qy` into pair 2 body: ty remains λ·(Qx−Rx) = Ry+Qy here,
+    // which is exactly what pair 2's mul uses. Saves one mod_sub_qb + one
+    // mod_add_qb (≈ 4k Clifford/~0 Toffoli from loads, but removes the
+    // add_nbit_qq passes they wrap).
+    //
+    // Uncompute lam. Use (Rx - Qx) as kaliski input; inv = -(Rx-Qx)^{-1}.
     mod_sub_qb(b, &tx, &ox, p);                   // tx = Rx - Qx
     with_kal_inv(b, &tx, p, |b, inv| {
-        // inv = -(Rx - Qx)^{-1} (native kaliski negative form).
-        // We want lam = 0 from lam = λ. λ = (Ry+Qy)/(Qx-Rx) = -(Ry+Qy)·(Rx-Qx)^{-1} = inv·(Ry+Qy).
-        // So mod_mul_sub: lam -= inv·(Ry+Qy) = lam - λ = 0.
-        mod_add_qb(b, &ty, &oy, p);                   // ty = Ry + Qy
         mod_mul_sub_qq(b, &lam, inv, &ty, p);         // lam -= inv·(Ry + Qy) = 0
-        mod_sub_qb(b, &ty, &oy, p);                   // ty = Ry
+        mod_sub_qb(b, &ty, &oy, p);                   // ty = Ry (external contract)
     });
     mod_add_qb(b, &tx, &ox, p);                   // tx = Rx
 

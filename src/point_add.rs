@@ -1207,7 +1207,8 @@ fn kaliski_iteration(
     // ─── STEP 0: is_zero = (v_w == 0);  m[i] ^= (f AND is_zero);  f ^= m[i] ───
     // add_f is zero here (uncomputed in step 5 of the prior iter, or 0 at
     // init). Borrow it as the is_zero scratch instead of allocating.
-    with_eq_zero(b, v_w, add_f, |b| {
+    // Uses with_eq_zero_fast: measurement-based OR chain uncompute (saves 255 CCX).
+    with_eq_zero_fast(b, v_w, add_f, |b| {
         b.ccx(f, add_f, m_i);
     });
     b.cx(m_i, f);
@@ -1277,8 +1278,14 @@ fn kaliski_iteration(
         // XOR the missing (add_f AND r[n]) bit into s[n] directly. Saves the
         // pair of load/unload CCX that would otherwise target tmp[n].
         b.ccx(add_f, r[n], s[n]);
-        // Unload tmp[0..n]; tmp[n] is already 0.
-        for i in 0..n { b.ccx(add_f, r[i], tmp[i]); }
+        // Unload tmp[0..n] via measurement-based AND uncompute (0 Toffoli).
+        // tmp[i] = add_f AND r[i], unchanged by Cuccaro add (addend preserved).
+        for i in 0..n {
+            let m = b.alloc_bit();
+            b.hmr(tmp[i], m);
+            b.cz_if(add_f, r[i], m);
+        }
+        // tmp[n] is already 0.
         b.free_vec(&tmp);
     }
 
@@ -1477,6 +1484,46 @@ fn kaliski_forward(b: &mut B, v_in: &[QubitId], st: &KaliskiState, p: U256) {
     // 4 calls total ≈ 8n Toffoli saved). Callers compensate by using the
     // negated inv: body multiplications that would normally `mul_add` with
     // +inv become `mul_sub` with -inv, and vice versa.
+}
+
+/// Like `with_eq_zero` but uses measurement-based uncomputation for the
+/// backward OR chain (0 Toffoli instead of n-1 CCX). NOT safe inside
+/// emit_inverse blocks (uses HMR ops).
+fn with_eq_zero_fast<F: FnOnce(&mut B)>(
+    b: &mut B,
+    v: &[QubitId],
+    flag: QubitId,
+    body: F,
+) {
+    let n = v.len();
+    assert!(n > 0);
+    if n == 1 {
+        b.x(v[0]);
+        b.cx(v[0], flag);
+        body(b);
+        b.cx(v[0], flag);
+        b.x(v[0]);
+        return;
+    }
+    let or_chain: Vec<QubitId> = b.alloc_qubits(n - 1);
+    // Forward OR chain (n-1 CCX)
+    or_step(b, v[0], v[1], or_chain[0]);
+    for i in 1..n - 1 {
+        or_step(b, or_chain[i - 1], v[i + 1], or_chain[i]);
+    }
+    b.x(or_chain[n - 2]);
+    b.cx(or_chain[n - 2], flag);
+    b.x(or_chain[n - 2]);
+    body(b);
+    b.x(or_chain[n - 2]);
+    b.cx(or_chain[n - 2], flag);
+    b.x(or_chain[n - 2]);
+    // Measurement-based uncompute (0 Toffoli)
+    for i in (1..n - 1).rev() {
+        or_step_uncompute(b, or_chain[i - 1], v[i + 1], or_chain[i]);
+    }
+    or_step_uncompute(b, v[0], v[1], or_chain[0]);
+    b.free_vec(&or_chain);
 }
 
 /// Measurement-based uncompute of one or_step: uncomputes

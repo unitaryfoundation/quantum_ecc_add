@@ -463,7 +463,7 @@ fn mod_add_qc(b: &mut B, acc: &[QubitId], c: U256, p: U256) {
     // acc := (acc + c) mod p. c is a compile-time constant.
     let n = acc.len();
     let a = load_const(b, n, c);
-    mod_add_qq(b, acc, &a, p);
+    mod_add_qq_fast(b, acc, &a, p);
     unload_const(b, &a, c);
 }
 
@@ -472,12 +472,14 @@ fn mod_sub_qc(b: &mut B, acc: &[QubitId], c: U256, p: U256) {
     let n = acc.len();
     let c_neg = (p - (c % p)) % p;
     let a = load_const(b, n, c_neg);
-    mod_add_qq(b, acc, &a, p);
+    mod_add_qq_fast(b, acc, &a, p);
     unload_const(b, &a, c_neg);
 }
 
 fn mod_add_qb(b: &mut B, acc: &[QubitId], bits: &[BitId], p: U256) {
     // acc := (acc + bits) mod p. `bits` is a classical bit register.
+    // Uses original mod_add_qq (not _fast) because mod_sub_qb calls
+    // emit_inverse(mod_add_qb).
     let a = load_bits(b, bits);
     mod_add_qq(b, acc, &a, p);
     unload_bits(b, &a, bits);
@@ -656,13 +658,84 @@ fn mod_halve_inplace(b: &mut B, v: &[QubitId], p: U256) {
 // fresh temporary via CCX or CX_if, runs the unconditional mod_add_qq /
 // mod_sub_qq, then unloads.
 
+/// Like `cmp_lt_into` but uses carry-ancilla + measurement-based uncompute
+/// for the inv_MAJ sweep. Saves n CCX. NOT emit_inverse-safe.
+fn cmp_lt_into_fast(b: &mut B, u: &[QubitId], v: &[QubitId], flag: QubitId) {
+    let n = u.len();
+    assert_eq!(n, v.len());
+    let c_in = b.alloc_qubit();
+    let carries = b.alloc_qubits(n);
+    for i in 0..n { b.x(u[i]); }
+
+    // Forward MAJ sweep with carry ancillae
+    b.cx(u[0], v[0]);
+    b.cx(u[0], c_in);
+    b.ccx(c_in, v[0], carries[0]);
+    b.cx(carries[0], u[0]);
+    for i in 1..n {
+        b.cx(u[i], v[i]);
+        b.cx(u[i], u[i - 1]);
+        b.ccx(u[i - 1], v[i], carries[i]);
+        b.cx(carries[i], u[i]);
+    }
+
+    b.cx(u[n - 1], flag);
+
+    // Backward inv_MAJ with measurement
+    for i in (1..n).rev() {
+        b.cx(carries[i], u[i]);
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        b.cz_if(u[i - 1], v[i], m);
+        b.cx(u[i], u[i - 1]);
+        b.cx(u[i], v[i]);
+    }
+    b.cx(carries[0], u[0]);
+    let m0 = b.alloc_bit();
+    b.hmr(carries[0], m0);
+    b.cz_if(c_in, v[0], m0);
+    b.cx(u[0], c_in);
+    b.cx(u[0], v[0]);
+
+    for i in 0..n { b.x(u[i]); }
+    b.free_vec(&carries);
+    b.free(c_in);
+}
+
+/// Like `mod_add_qq` but uses `cmp_lt_into_fast` for the flag uncompute.
+/// NOT safe inside emit_inverse blocks.
+fn mod_add_qq_fast(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {
+    let n = acc.len();
+    assert_eq!(n, a.len());
+    debug_assert_eq!(n, 256);
+
+    let (acc_ext, acc_ovf) = ext_reg(b, acc);
+    let (a_ext, a_ovf) = ext_reg(b, a);
+
+    add_nbit_qq(b, &a_ext, &acc_ext);
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+    add_nbit_const(b, &acc_ext, c);
+    let flag = b.alloc_qubit();
+    b.cx(acc_ovf, flag);
+    b.x(flag);
+    csub_nbit_const(b, &acc_ext, c, flag);
+    b.x(flag);
+    b.cx(flag, acc_ovf);
+    cmp_lt_into_fast(b, &acc_ext[..n], &a_ext[..n], flag);
+    b.free(flag);
+
+    unext_reg(b, a_ovf);
+    unext_reg(b, acc_ovf);
+    let _ = (acc_ext, a_ext);
+}
+
 fn cmod_add_qq(b: &mut B, acc: &[QubitId], a: &[QubitId], ctrl: QubitId, p: U256) {
     let n = acc.len();
     let f = b.alloc_qubits(n);
     for i in 0..n {
         b.ccx(ctrl, a[i], f[i]);
     }
-    mod_add_qq(b, acc, &f, p);
+    mod_add_qq_fast(b, acc, &f, p);
     // Gidney measurement-based AND uncomputation: f[i] = ctrl AND a[i],
     // which is unchanged by mod_add_qq (Cuccaro restores the addend).
     // HMR + classically-conditioned CZ costs 0 Toffoli vs 256 CCX.
@@ -695,7 +768,7 @@ fn cmod_add_qq_bit(b: &mut B, acc: &[QubitId], a: &[QubitId], ctrl: BitId, p: U2
     for i in 0..n {
         b.cx_if(a[i], f[i], ctrl);
     }
-    mod_add_qq(b, acc, &f, p);
+    mod_add_qq_fast(b, acc, &f, p);
     for i in 0..n {
         b.cx_if(a[i], f[i], ctrl);
     }
@@ -1415,7 +1488,7 @@ fn mul_by_const_acc(
             if subtract {
                 mod_sub_qq(b, acc, &tmp, p);
             } else {
-                mod_add_qq(b, acc, &tmp, p);
+                mod_add_qq_fast(b, acc, &tmp, p);
             }
         }
         if i < top {
@@ -1886,7 +1959,7 @@ pub fn build() -> Vec<Op> {
         for i in 0..N { b.x_if(dxr[i], ox[i]); }     // dxr = Qx
         mod_sub_qq(b, &dxr, &tx, p);                  // dxr = Qx − Rx
         mod_mul_add_qq(b, &ty, &lam, &dxr, p);        // ty += λ·(Qx − Rx)
-        mod_add_qq(b, &dxr, &tx, p);                  // dxr += Rx → Qx
+        mod_add_qq_fast(b, &dxr, &tx, p);              // dxr += Rx → Qx
         for i in 0..N { b.x_if(dxr[i], ox[i]); }     // dxr = 0
         b.free_vec(&dxr);
     }

@@ -2327,24 +2327,19 @@ pub fn build() -> Vec<Op> {
     // cheaper than mod_sub_qb (1024 vs 1280 per call, saves 512 total).
     mod_mul_sub_qq(b, &tx, &lam, &lam, p);
     mod_add_double_qb(b, &tx, &ox, p);
-    mod_neg_inplace_fast(b, &tx, p);
-
-    // Fold the dxr block into tx itself. Sub Qx from tx (= Rx - Qx) and use
-    // it directly as the multiplier; ty receives +(Ry+Qy) instead of the
-    // previous -(Ry+Qy). This eliminates the dxr ancilla register, drops
-    // mod_sub_qq_fast(dxr,tx) + mod_add_qq_fast(dxr,tx) (~9n CCX), and
-    // sets up tx = Rx - Qx as the kaliski input in one shot.
-    mod_sub_qb(b, &tx, &ox, p);                          // tx = Rx - Qx
+    // Fold mod_neg + mod_sub_qb into mod_add_qb + mod_neg: mod_add_qb is
+    // cheaper than mod_sub_qb by n CCX. Result equivalent: tx = Rx - Qx.
+    mod_add_qb(b, &tx, &ox, p);                          // tx = dx - λ² + 3Qx
+    mod_neg_inplace_fast(b, &tx, p);                     // tx = -(...)= Rx - Qx
     mod_mul_horner_add_qq(b, &ty, &lam, &tx, p);          // ty += (-λ)·(Rx - Qx) = +(Ry + Qy)
     with_kal_inv_raw(b, &tx, p, |b, inv_raw| {
-        // Scale lam up to match Kaliski's raw 2^(2N-1)-scaled inverse.
-        for _ in 0..(2 * N - 1) { mod_double_inplace_fast(b, &lam, p); }
-        // Inline no-neg unadd: with ty in flipped sign convention, cmod_add
-        // of inv_raw (without internal negation) zeroes lam. End lam =
-        // (-λ·2^(2N-1) + inv_raw·ty)/2^(n-1) = 2^N·(-λ + (Ry+Qy)/(Qx-Rx)) = 0.
-        for i in 0..N {
+        // MSB-first Horner: end lam = 2^(N-1)·init + inv_raw·ty. Choose init
+        // = -λ·2^N (so 2^(N-1)·init = -λ·2^(2N-1)) by pre-doubling N times
+        // (vs 2N-1 for LSB-first). Saves N-1 = 255 halve ops on lam.
+        for _ in 0..N { mod_double_inplace_fast(b, &lam, p); }
+        for i in (0..N).rev() {
+            if i < N - 1 { mod_double_inplace_fast(b, &lam, p); }
             cmod_add_qq(b, &lam, inv_raw, ty[i], p);
-            if i < N - 1 { mod_halve_inplace_fast(b, &lam, p); }
         }
         mod_sub_qb(b, &ty, &oy, p);                      // ty = (Ry+Qy) - Qy = Ry
     });

@@ -101,3 +101,6 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1776374648	e6efd4c	8583660.000	47414401.703	3080	65700386	OK	drop 4 negs around pair1 unadd, inline loop
 1776375382	0340f24	8580847.000	47388317.734	3080	65666317	OK	fold dxr block into tx, drop inner negs in pair2 unadd
 1776375593	23d3fa0	8515822.000	46700170.953	3080	64880662	OK	LSB-first Horner for pair1 mul: -255 halves on lam
+1776375656	c7350f4	8450797.000	46012156.156	3080	64095007	OK	MSB-first Horner for pair2 unadd: -255 doubles
+1776375801	c7350f4	8450544.000	46009668.594	3080	64090735	OK	fold mod_neg+mod_sub_qb into mod_add_qb+mod_neg
+1776375808	c7350f4	8450544.000	46009668.594	3080	64090735	OK	fold mod_neg+mod_sub_qb into mod_add_qb+mod_neg

@@ -88,3 +88,4 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1776363025	da61fa9	10557910.000	66585167.281	3338	87928700	OK	negative-lam flow in pair1/pair2
 1776363068	da61fa9	10557910.000	66584614.797	3082	87927932	OK	negative-lam flow + in-place mod_mul_add
 1776365629	6df7703	10034646.000	61324614.422	3082	81866450	OK	absorb raw Kaliski scaling into lam
+1776365890	ff8d569	9903574.000	60185148.062	3082	81282856	OK	reverse Horner cleanup for known products

@@ -1085,6 +1085,23 @@ fn mod_mul_horner_add_qq(
     }
 }
 
+/// Exact inverse of `mod_mul_horner_add_qq` on the accumulator:
+/// if `acc` currently holds `x * y mod p`, this maps it back to 0 while
+/// leaving `x` and `y` unchanged.
+fn mod_mul_horner_unadd_qq(
+    b: &mut B,
+    acc: &[QubitId],
+    x: &[QubitId],
+    y: &[QubitId],
+    p: U256,
+) {
+    let n = acc.len();
+    for i in 0..n {
+        cmod_sub_qq(b, acc, x, y[i], p);
+        if i < n - 1 { mod_halve_inplace_fast(b, acc, p); }
+    }
+}
+
 /// Horner-method multiplication: acc -= x * y mod p (= acc += (p-x)*y).
 /// REQUIRES acc = 0 on entry.
 fn mod_mul_horner_sub_qq(
@@ -2336,7 +2353,11 @@ pub fn build() -> Vec<Op> {
     with_kal_inv_raw(b, &tx, p, |b, inv_raw| {
         mod_mul_horner_add_qq(b, &lam, &ty, inv_raw, p); // lam = (-λ) * 2^(2N-1)
         for _ in 0..(2 * N - 1) { mod_halve_inplace_fast(b, &lam, p); }
-        mod_mul_add_qq(b, &ty, &lam, &tx, p);        // Py += (-λ)·dx = 0
+        // ty = dy = λ·dx. Flip lam to +λ, run the reverse-Horner unadd,
+        // then restore lam to the negative convention used below.
+        mod_neg_inplace_fast(b, &lam, p);
+        mod_mul_horner_unadd_qq(b, &ty, &lam, &tx, p);
+        mod_neg_inplace_fast(b, &lam, p);
     });
 
     // Px := λ² - Px_orig - Qx. Rearranged: tx = dx - λ². Add 2Qx, then
@@ -2367,7 +2388,7 @@ pub fn build() -> Vec<Op> {
         // The product then zeroes lam directly, so no down-scaling restore
         // is needed afterward.
         for _ in 0..(2 * N - 1) { mod_double_inplace_fast(b, &lam, p); }
-        mod_mul_sub_qq(b, &lam, inv_raw, &ty, p);     // lam -= inv_raw·(-(Ry + Qy)) = 0
+        mod_mul_horner_unadd_qq(b, &lam, inv_raw, &ty, p);
         mod_add_qb(b, &ty, &oy, p);                   // ty = -Ry
         mod_neg_inplace_fast(b, &ty, p);              // ty = Ry
     });

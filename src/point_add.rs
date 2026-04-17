@@ -1552,17 +1552,17 @@ fn squaring_sub_from_acc_schoolbook(
     let lo: Vec<QubitId> = tmp_ext[0..n].to_vec();
     let hi: Vec<QubitId> = tmp_ext[n..2*n].to_vec();
     mod_sub_qq_fast(b, acc, &lo, p);
-    let max_set_bit: usize = 32; // c = 2^32 + 977
-    for k in 0..=max_set_bit {
+    // Same shift-by-22 optimization: replace iters 10..31 with mod_shift_left_by_22.
+    for k in 0..=9 {
         if bit(c, k) {
             mod_sub_qq_fast(b, acc, &hi, p);
         }
-        if k < max_set_bit {
-            mod_double_inplace_fast(b, &hi, p);
-        }
+        mod_double_inplace_fast(b, &hi, p);
     }
-    // Walk hi back to original (max_set_bit halves).
-    for _ in 0..max_set_bit {
+    let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
+    mod_sub_qq_fast(b, acc, &hi, p);  // final sub at k=32
+    mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
+    for _ in 0..10 {
         mod_halve_inplace_fast(b, &hi, p);
     }
 

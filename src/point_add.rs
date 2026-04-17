@@ -1990,12 +1990,10 @@ fn kaliski_iteration(
     b.cx(m_i, b_f);                       // b_f = a_f XOR m_i
 
     // ─── STEP 2: with l = u > v_w: a ^= (f AND l AND ¬b); m_i ^= same.
-    // Both targets share the same (f, l_gt, ¬b_f) control. Compute the AND
-    // of f and l_gt once, apply to both targets, then uncompute.
+    // Late-iter: u and v_w have bitlen ≤ 2n-iter, so only compare low 2n-iter bits.
+    let cmp_width = if iter_idx < n { n } else { 2 * n - iter_idx };
     let l_gt = b.alloc_qubit();
-    with_gt(b, u, v_w, l_gt, |b| {
-        // add_f is 0 at this point (not yet computed in step 4). Borrow it
-        // as the inner scratch for the (f AND l_gt) helper.
+    with_gt(b, &u[0..cmp_width], &v_w[0..cmp_width], l_gt, |b| {
         b.x(b_f);                          // negate polarity of b_f
         b.ccx(f, l_gt, add_f);             // add_f = f AND l_gt
         b.ccx(add_f, b_f, a_f);            // a_f ^= add_f AND ¬b_f_orig
@@ -2428,8 +2426,9 @@ fn kaliski_iteration_backward(
     for j in (0..uv_width).rev() { cswap(b, a_f, u[j], v_w[j]); }
 
     // ── Reverse STEP 2 (with_gt body is self-inverse) ──────────────────
+    let cmp_width = if iter_idx < n { n } else { 2 * n - iter_idx };
     let l_gt = b.alloc_qubit();
-    with_gt(b, u, v_w, l_gt, |b| {
+    with_gt(b, &u[0..cmp_width], &v_w[0..cmp_width], l_gt, |b| {
         b.x(b_f);
         b.ccx(f, l_gt, add_f);
         b.ccx(add_f, b_f, m_i);

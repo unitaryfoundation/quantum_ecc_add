@@ -1,7 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-note=${AUTORESEARCH_NOTE:-autoresearch}
+note=${AUTORESEARCH_NOTE:-}
+if [[ -z "$note" && -f autoresearch.note ]]; then
+  note=$(tr '\n' ' ' < autoresearch.note)
+fi
+if [[ -z "$note" ]]; then
+  note=autoresearch
+fi
 
 cargo build --release >/dev/null 2>&1
 

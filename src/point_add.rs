@@ -2448,7 +2448,7 @@ fn alloc_kaliski_state(b: &mut B, n: usize) -> KaliskiState {
         v_w: b.alloc_qubits(n),
         r: b.alloc_qubits(n),
         s: b.alloc_qubits(n),
-        m_hist: b.alloc_qubits(2 * n - 112),
+        m_hist: b.alloc_qubits(2 * n - 113),
         f_flag: b.alloc_qubit(),
         a_flag: b.alloc_qubit(),
         b_flag: b.alloc_qubit(),
@@ -2491,7 +2491,7 @@ fn kaliski_forward(b: &mut B, v_in: &[QubitId], st: &KaliskiState, p: U256) {
     b.x(st.f_flag);
 
     // ─── 2n iterations ───
-    for i in 0..(2 * n - 112) {
+    for i in 0..(2 * n - 113) {
         kaliski_iteration(
             b, p, &st.u, &st.v_w, &st.r, &st.s,
             st.m_hist[i],
@@ -2759,7 +2759,7 @@ fn kaliski_backward(b: &mut B, v_in: &[QubitId], st: &KaliskiState, p: U256) {
     let n = v_in.len();
 
     // ─── Reverse 2n iterations (in reverse order) ───
-    for i in (0..(2 * n - 112)).rev() {
+    for i in (0..(2 * n - 113)).rev() {
         kaliski_iteration_backward(
             b, p, &st.u, &st.v_w, &st.r, &st.s,
             st.m_hist[i],
@@ -2814,9 +2814,9 @@ fn with_kal_inv<F: FnOnce(&mut B, &[QubitId])>(
     with_kal_inv_raw(b, v_in, p, |b, inv_raw| {
         // Kaliski's raw output carries a 2^(2n-1) factor. Apply the
         // correction in place when callers need the exact inverse.
-        for _ in 0..(2 * n - 112) { mod_halve_inplace_fast(b, inv_raw, p); }
+        for _ in 0..(2 * n - 113) { mod_halve_inplace_fast(b, inv_raw, p); }
         body(b, inv_raw);
-        for _ in 0..(2 * n - 112) { mod_double_inplace_fast(b, inv_raw, p); }
+        for _ in 0..(2 * n - 113) { mod_double_inplace_fast(b, inv_raw, p); }
     });
 }
 
@@ -2915,7 +2915,7 @@ pub fn build() -> Vec<Op> {
         // First mul: lam starts at 0, use zero-acc fast path (saves n-1 CCX).
         mod_mul_write_into_zero_acc_schoolbook(b, &lam, &ty, inv_raw, p);
         // Halve 2N-1 times: lam = -λ.
-        for _ in 0..(2 * N - 112) { mod_halve_inplace_fast(b, &lam, p); }
+        for _ in 0..(2 * N - 113) { mod_halve_inplace_fast(b, &lam, p); }
         // Second mul via schoolbook: ty += lam*tx = dy + (-λ)*dx = 0.
         mod_mul_add_into_acc_schoolbook(b, &ty, &lam, &tx, p);
     });
@@ -2934,7 +2934,7 @@ pub fn build() -> Vec<Op> {
     with_kal_inv_raw(b, &tx, p, |b, inv_raw| {
         // Schoolbook approach: pre-double lam to -λ·2^(2N-1), then add
         // inv_raw·ty mod p = +λ·2^(2N-1) → lam = 0.
-        for _ in 0..(2 * N - 112) { mod_double_inplace_fast(b, &lam, p); }
+        for _ in 0..(2 * N - 113) { mod_double_inplace_fast(b, &lam, p); }
         mod_mul_add_into_acc_schoolbook(b, &lam, inv_raw, &ty, p);
         mod_sub_qb(b, &ty, &oy, p);                      // ty = (Ry+Qy) - Qy = Ry
     });

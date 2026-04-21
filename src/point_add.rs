@@ -1553,15 +1553,16 @@ fn schoolbook_mul_into_addsub(b: &mut B, x: &[QubitId], y: &[QubitId], tmp_ext: 
     // -2^{2n}: toggle wide[2n].
     b.x(wide[2 * n]);
 
-    // -x as full (2n+1)-bit sub: the borrow from low bits must propagate through
-    // all higher bits of wide to correctly remove x from the whole accumulator.
+    // -x as full (2n+1)-bit sub. Use in-place cuccaro_sub (no carry ancillae) to
+    // keep peak qubits low during this otherwise-expensive full-width correction.
+    // Costs n-1 extra Toffoli vs cuccaro_sub_fast but saves 2n peak qubits.
     {
         let mut x_ext: Vec<QubitId> = x.to_vec();
         while x_ext.len() < 2 * n + 1 {
             x_ext.push(b.alloc_qubit());
         }
         let c_in = b.alloc_qubit();
-        cuccaro_sub_fast(b, &x_ext, &wide, c_in);
+        cuccaro_sub(b, &x_ext, &wide, c_in);
         b.free(c_in);
         for _ in n..2 * n + 1 {
             let q = x_ext.pop().unwrap();
@@ -1608,13 +1609,14 @@ fn schoolbook_mul_into_addsub_inverse(b: &mut B, x: &[QubitId], y: &[QubitId], t
         b.free(pad);
     }
     // Reverse correction 3 (sub x full-width): add x back with borrow propagation.
+    // Use in-place cuccaro_add (no carries) to keep peak low, matching forward.
     {
         let mut x_ext: Vec<QubitId> = x.to_vec();
         while x_ext.len() < 2 * n + 1 {
             x_ext.push(b.alloc_qubit());
         }
         let c_in = b.alloc_qubit();
-        cuccaro_add_fast(b, &x_ext, &wide, c_in);
+        cuccaro_add(b, &x_ext, &wide, c_in);
         b.free(c_in);
         for _ in n..2 * n + 1 {
             let q = x_ext.pop().unwrap();

@@ -226,3 +226,5 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1776792616	63a0bff	4306887.000	24086294.101	3614	34255151	OK	autoresearch-checks
 1776797746	855f5da	4306887.000	24086277.890	3614	34255151	OK	baseline for qubit-reduction session (post Toffoli optimizations) 
 1776797756	855f5da	4306887.000	24086282.729	3614	34255151	OK	autoresearch-checks
+1776798232	5740d2e	4313567.000	24056207.769	3507	34228431	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1776798242	5740d2e	4313567.000	24056227.230	3507	34228431	OK	autoresearch-checks

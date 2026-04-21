@@ -1,1 +1,1 @@
-baseline for qubit-reduction session (post Toffoli optimizations)
+schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries)

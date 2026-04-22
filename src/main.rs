@@ -1,9 +1,9 @@
 //! Experiment harness: builds the point-addition circuit defined in
-//! `point_add.rs`, runs it against the zenodo `Simulator` with random
-//! test shots, and reports Toffoli / Clifford / qubit counts.
+//! the `point_add/` module, runs it against the zenodo `Simulator` with
+//! random test shots, and reports Toffoli / Clifford / qubit counts.
 //!
-//! Research-loop contract: ONLY `point_add.rs` is edited by the loop.
-//! This file, `builder.rs`, `circuit.rs`, `sim.rs`, and
+//! Research-loop contract: ONLY files under `src/point_add/` are edited
+//! by the loop. This file, `circuit.rs`, `sim.rs`, and
 //! `weierstrass_elliptic_curve.rs` are harness and must not be touched.
 //!
 //! Attribution: `circuit.rs`, `sim.rs`, and `weierstrass_elliptic_curve.rs`

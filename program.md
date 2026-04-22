@@ -7,10 +7,11 @@ within a qubit budget. Run continuously. Do not pause for human confirmation.
 
 ## Scope of edits
 
-- You may ONLY modify `src/point_add.rs`.
-- You may NOT modify `src/main.rs`, `src/builder.rs`, `src/circuit.rs`,
-  `src/sim.rs`, `src/weierstrass_elliptic_curve.rs`, `Cargo.toml`,
-  `Cargo.lock`, `rust-toolchain`, `results.tsv` (directly) or anything else.
+- You may ONLY modify files under `src/point_add/` (the whole folder is
+  yours — add/rename/split submodules freely).
+- You may NOT modify `src/main.rs`, `src/circuit.rs`, `src/sim.rs`,
+  `src/weierstrass_elliptic_curve.rs`, `Cargo.toml`, `Cargo.lock`,
+  `rust-toolchain`, `results.tsv` (directly) or anything else.
 - You may NOT add dependencies.
 - You may NOT modify the test harness or the correctness check.
 
@@ -82,8 +83,8 @@ substantial room.
 
 On first run only:
 1. `git checkout -b autoresearch/<YYYY-MM-DD>` — work on a dated branch.
-2. Read `src/point_add.rs`, `src/builder.rs`, and the module doc at the top
-   of `point_add.rs` (steps 1–12 of the point-add algorithm).
+2. Read `src/point_add/mod.rs` and the module doc at its top
+   (steps 1–12 of the point-add algorithm).
 3. Skim `src/circuit.rs` for the `Op` IR and `src/sim.rs` for how gates
    are counted (in particular `sim.rs:102` — `executed_shots` semantics).
 4. Verify the baseline runs: `cargo run --release -- --note baseline` should
@@ -95,10 +96,10 @@ On first run only:
 Repeat indefinitely:
 
 1. **Pick an idea**. Either from the seed list below or your own. Feel free to pursue ideas you gave up on earlier if you reach a bottleneck.
-2. **Edit** `src/point_add.rs` to implement it.
+2. **Edit** files under `src/point_add/` to implement it.
 3. **Build**: `cargo build --release 2>&1 | tail -20`.
    - If it fails to compile, either fix immediately (if the fix is obvious
-     and small) or `git checkout -- src/point_add.rs` and pick a different
+     and small) or `git checkout -- src/point_add/` and pick a different
      idea. Do not leave the tree broken.
 4. **Run**: `cargo run --release -- --note "short description of the idea"`
    — `main.rs` automatically appends a TSV row to `results.tsv` with
@@ -109,7 +110,7 @@ Repeat indefinitely:
      - `git add -A && git commit -m "<short desc>: toffoli <old> → <new>"`
      - Update your in-memory `best_toffoli`.
    - Else:
-     - `git checkout -- src/point_add.rs` to revert. The TSV row stays;
+     - `git checkout -- src/point_add/` to revert. The TSV row stays;
        it's part of the research log.
 6. Go to 1.
 
@@ -149,7 +150,7 @@ from scratch, swap in a new algorithm, do thousand-line refactors in a single
 commit, and spend full sessions on moonshots that might not pan out.
 The only immovable constraint is the harness contract.
 
-Micro optimizations are explicitly banned. They are a waste of time.
+Key: Micro optimizations are explicitly BANNED. They are a waste of time. Changes must be lead to large gains.
 
 ## Rules of thumb
 
@@ -167,3 +168,5 @@ Keep iterating until one of:
 - The user interrupts.
 
 What is key is that you do not stop until you meet the above. The world is your oyster. LOOP FOREVER.
+
+Never stop. I'm going to bed. Keep working. There is no budget, there are no constraints; we just need a high state of the art.                                                

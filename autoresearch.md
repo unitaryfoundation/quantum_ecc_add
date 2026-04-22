@@ -1,7 +1,7 @@
 # Autoresearch: quantum_ecc secp256k1 point-add Toffoli reduction
 
 ## Objective
-Reduce the **average executed Toffoli count** of the reversible secp256k1 affine point-add circuit built in `src/point_add.rs`, while preserving harness correctness and keeping qubits within the current regime.
+Reduce the **average executed Toffoli count** of the reversible secp256k1 affine point-add circuit built in the `src/point_add/` module, while preserving harness correctness and keeping qubits within the current regime.
 
 Committed best on `autoresearch/2026-04-20`:
 - avg_toffoli: 4,672,931 (Karatsuba 1-level everywhere + 2-level at between-pair site)
@@ -19,11 +19,11 @@ Target (Google paper): 2.1M Toffoli @ 1425 qubits (low-gate) or 2.7M Toffoli @ 1
 `./autoresearch.sh`. Writes `METRIC ...=...` lines.
 
 ## Files in Scope
-- `src/point_add.rs` — the only project source file allowed to change.
+- `src/point_add/` — the only project source folder allowed to change (edit/add/split submodules freely).
 - `autoresearch.md`, `autoresearch.sh`, `autoresearch.checks.sh`, `autoresearch.ideas.md`, `autoresearch.note`.
 
 ## Off Limits
-- Everything except `src/point_add.rs` and the autoresearch session files.
+- Everything except files under `src/point_add/` and the autoresearch session files.
 - No new dependencies.
 
 ## Constraints
@@ -135,3 +135,166 @@ After deep literature review (Kim 2026, HRSL 2020, Litinski 2023, Litinski 2024,
 - 2-level only at the non-Kaliski-peak mul site, Kaliski iters restored to 400/400 — **-7,993 Toffoli** ✓
 - Kaliski iter probing: 397/397 fails; 398/397 OK; 397/398 fails.
 - Karatsuba seed tax: changing the op stream shifts the Fiat-Shamir seed and forces Kaliski iters higher; tuning per-pair iters is mandatory.
+
+## Session 2026-04-22 (profiling + B-Y + deep analysis)
+
+### Per-phase profiling infrastructure
+Added `TRACE_PHASES=1` env gate inside build(): classifies emitted Toffolis
+by phase and prints the breakdown. This is where my baseline accounting came
+from — measured per-phase CCX counts at commit `b58a47f`.
+
+Attribution (total emitted 4.39M Toffoli):
+
+| phase                 | ccx     | % total |
+|-----------------------|---------|---------|
+| kal_step4             | 645,692 | 14.7%   |
+| bk_step4              | 644,894 | 14.7%   |
+| bk_step9_cswap        | 323,500 |  7.4%   |
+| kal_step9_cswap       | 323,500 |  7.4%   |
+| bk_step3_cswap        | 322,990 |  7.4%   |
+| kal_step3_cswap       | 322,990 |  7.4%   |
+| schoolbook_mul_inverse| 201,216 |  4.6%   |
+| kal_step1 (inc step2) | 187,174 |  4.3%   |
+| bk_step2              | 185,578 |  4.2%   |
+| bk_step0_eqzero       | 183,982 |  4.2%   |
+| kal_step0_eqzero      | 183,982 |  4.2%   |
+| rshift22_rev_step2    | 127,228 |  2.9%   |
+| pair1_halve           | 101,745 |  2.3%   |
+| pair2_double          | 101,745 |  2.3%   |
+| pair1_mul1/2, pair2_mul | 224,729 | 5.1% |
+| Kaliski sub-total ≈   | 3,548,316 | **80.8%** |
+
+**Implication**: any gain < 5% on the total comes from Kaliski optimizations.
+Everything else is combined < 20%.
+
+### B-Y divsteps2 analytical comparison
+
+Implemented classical B-Y harness in `src/point_add/by.rs` (fixed a coefficient-
+tracking bug in my first attempt; all 3 unit tests pass including exhaustive
+small-prime verification and Mersenne-61 spot checks).
+
+B-Y's basic divstep per iter for n-bit registers, analytic estimate:
+- swap branch: 4n CCX (cswap of 4 pairs) + 3n (conditional negate) = 7n
+- cond sub g ± f and (Q ± U, R ± V): 3n
+- halve: 0 (swaps)
+- **Per-iter total: ~10n = 2560 CCX** at n=256.
+
+Safegcd bound for n=256: `ceil((49*256 + 80)/17) = 743` iters.
+
+| variant | iter cost | iters | one-way | vs Kaliski |
+|---------|-----------|-------|---------|------------|
+| Kaliski (measured) | ~2,180 | 398 | 868k | baseline |
+| B-Y w=1           | ~2,560 | 743 | 1,900k | **+119%** |
+| B-Y w=2 (16-entry matrix) | ~3,100 | 372 | 1,150k | +32% |
+| B-Y w=4 (128-entry matrix) | ~7,800 | 186 | 1,450k | +68% |
+| B-Y w=8 (32K-entry matrix) | ~45,000 | 93  | 4,180k | +382% |
+
+**Conclusion: B-Y is analytically worse than Kaliski at every jump width**.
+The per-iter simplifications (no comparator, single cswap) don't compensate
+for the higher safegcd iter count (743 vs 398). Jumping with large w blows
+up because matrix-entry magnitudes grow like 2^w, forcing full n-bit mults.
+
+B-Y classical harness is kept in `src/point_add/by.rs` as `#[allow(dead_code)]`
+for possible future jumping-divstep exploration. Not wired into the circuit.
+
+### Montgomery batched inversion: cleanup obstruction (revised analysis)
+
+The algebra works:
+- N = dy² − (Px+2Qx)·dx²; invert c = dx·N once; derive dx⁻¹ = c⁻¹·N and
+  (Rx−Qx)⁻¹ = c⁻¹·dx³.
+- Gross save: 1 Kaliski ≈ 1.77M (forward+backward on a single input).
+- Added cost: ~4 extra muls + 1 squaring ≈ 400–600k.
+- Naive net: ~1.2M saved = 27% reduction.
+
+**Obstruction** (confirming prior session): if we compute c⁻¹ once (into
+`c_inv_saved` via CX-copy inside Kaliski body) and use it for both derived
+inverses, we face the cleanup problem: zeroing `c_inv_saved` at end of
+circuit requires either
+  (a) another Kaliski on c (2 Kaliski total — no savings), or
+  (b) expressing c⁻¹ as a rational function of end-state (tx=Rx, ty=Ry,
+      classical ox, oy). This requires λ or dx, both lost after the flow.
+
+There's no measurement trick (HMR) that clears `c_inv_saved` because it's
+not a simple AND of quantum values — it's a full modular inverse.
+
+**Verdict: Montgomery batched nets zero Toffoli savings in a single-point-add
+context**, confirmed independently by careful register-lifetime analysis.
+
+### Jacobian coordinates: the cleanup obstruction generalizes
+
+Natural Jacobian formulation:
+- Compute (X₃, Y₃, Z₃) = Jacobian(P, Q). 8 muls + 3 squarings ≈ 1M CCX.
+- One Kaliski on Z₃ to get Z₃⁻¹. 1.77M.
+- Multiply X₃·Z₃⁻² and Y₃·Z₃⁻³ for affine. ~150k.
+- Total forward: ~2.9M. Looks great — ~34% savings.
+
+**Obstruction**: writing Rx, Ry in-place on tx, ty requires either:
+  (a) keeping tx=Px, ty=Py preserved as scratch, in which case they form
+      leftover scratch at end that can't be zeroed without Px, Py as inputs
+      (same circular dependency as Montgomery batched), or
+  (b) the standard Bennett pattern: compute into scratch, swap, reverse.
+      But the reverse needs original tx=Px, ty=Py which have been swapped
+      out.
+
+Equivalent variants all hit the same wall: recovering Px, Py from end-state
+(Rx, Ry, ox, oy) requires a nonlinear operation equivalent to another
+full point-subtraction — same cost as the forward flow. So Jacobian with
+clean cleanup costs ~2× (one forward + one reverse as point-subtract), which
+is worse than the current 2-Kaliski flow.
+
+### The fundamental theorem (conjectured)
+
+Any reversible, in-place quantum circuit for single-EC-point addition over
+a prime field requires EITHER:
+  (a) two full modular inversions (current 2-Kaliski approach), or
+  (b) two full EC-addition-equivalent compute+reverse passes, or
+  (c) some algebraic trick that expresses one input of the pair in terms of
+      the output plus classical constants.
+
+Paths (a) and (b) cost approximately the same. Published SOTA (Litinski 2023
+at 50M, HRSL 2020 at 12M, Kim 2026 at 17M) all use (a). Google/Babbush 2026's
+2.1–2.7M is not disclosed but likely combines (a) with extensive primitive-
+level tuning we don't have access to.
+
+### Next-session priorities
+
+**Promising directions I could not close tonight:**
+1. **Windowed classical-const mul** to replace the 399 halves + 399 doubles
+   on `lam`. Estimated ~160k CCX saved (3.7% of circuit). Requires building
+   a QROM lookup primitive. Multi-hour implementation.
+2. **Kim-style unconditional Kaliski** + m_hist elimination (~400 qubits
+   freed) + 2-level Karatsuba in-Kaliski (+258 qubits). Net: maybe neutral
+   on qubits, ~50–100k Toffoli savings. Moderate complexity.
+3. **B-Y w=2 with careful reversible matrix application** (above numbers are
+   upper bounds; tight implementation might do better if matrix entries ≤ 2
+   can be specialized). Would need to match or beat 400k one-way to help.
+
+**Directions I'm convinced are dead-ends:**
+- Montgomery batched (single-call cleanup is impossible without 2nd Kaliski).
+- Naive Jacobian (same cleanup obstruction).
+- B-Y w=4 or higher (matrix-entry magnitudes blow up cost).
+- Toom-3 (confirmed last session: non-trivial div-by-3 outweighs the win).
+- Fermat inversion via addition chain (256–260 muls at 70k each = 18M,
+  5× worse than Kaliski).
+
+### Crypto-specific angles to investigate next
+- **Co-Z arithmetic** (Meloni 2007): for scalar mul, re-uses Z coords across
+  operations. Not directly applicable to single add but might have a
+  single-add specialization.
+- **Atomic-block formulas** (Chevalier-Mames et al. 2004): compute
+  R = P + Q via a series of operations where P and Q get mutated in a
+  structured way that might admit cheaper uncompute.
+- **Precomputed classical inversion tables**: Q (= offset) is classical, so
+  any quantities depending only on Q can be precomputed. The expensive
+  inversions are on dx and (Rx-Qx) — both depend on quantum Px,Py,Rx. So
+  classical precomputation doesn't help the inversions, only potentially
+  other mul operands.
+- **Short lattice representation of λ** via quantum-classical coupling. No
+  obvious mechanism.
+
+### Infrastructure added this session (committed)
+- `TRACE_PHASES=1` / `TRACE_PHASES_VERBOSE=1` env gates in `build()` for
+  per-phase emitted-Toffoli breakdown.
+- `src/point_add/by.rs` with classical B-Y divsteps2 harness + 3 unit tests
+  (all passing). Activated via `BY_TEST=1`.
+

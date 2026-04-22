@@ -341,3 +341,8 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1776845271	3c1552a	4394546.000	24903445.889	2729	35186356	OK	
 1776845340	3c1552a	4394546.000	24903445.889	2729	35186356	OK	trace phases v2 with Kaliski step attribution
 1776845964	3c1552a	4394546.000	24903445.889	2729	35186356	OK	diagnostic: per-phase profiling infrastructure
+1776846003	b58a47f	4394546.000	24903445.889	2729	35186356	OK	trace peak check
+1776847367	b58a47f	4394546.000	24903445.889	2729	35186356	OK	classical BY divsteps2 harness validation
+1776847684	b58a47f	4394546.000	24903445.889	2729	35186356	OK	by classical harness debug
+1776849371	b58a47f	2023923.901	11469983.764	2729	35155778	FAIL	iter probe: pair1=398, pair2=399 | PHASE GARBAGE: global_phase = 0x0000020000000000 across 64 live shots (must be 0)
+1776849440	b58a47f	778432.270	4411530.755	2729	35155778	FAIL	iter probe: pair1=399 pair2=398 | PHASE GARBAGE: global_phase = 0x0004000000000000 across 64 live shots (must be 0)

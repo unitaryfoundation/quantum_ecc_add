@@ -83,7 +83,10 @@ pub enum KCase {
 }
 
 impl KCase {
-    pub fn matrix(self) -> Mat2 {
+    /// Matrix for the (u, v) register update over one Kaliski micro-step:
+    ///
+    ///   (u', v')^T = (1/2) · M_uv · (u, v)^T
+    pub fn uv_matrix(self) -> Mat2 {
         match self {
             KCase::UEven => Mat2 { a00: 1, a01: 0, a10: 0, a11: 2 },
             KCase::VEven => Mat2 { a00: 2, a01: 0, a10: 0, a11: 1 },
@@ -91,8 +94,24 @@ impl KCase {
             KCase::VGtU  => Mat2 { a00: 2, a01: 0, a10: -1, a11: 1 },
         }
     }
-}
 
+    /// Matrix for the coefficient-side (r, s) update over one Kaliski step.
+    ///
+    /// Derived directly from the implemented sequence in `kaliski_iteration`:
+    ///
+    /// - UEven:  swap(r,s); double r; swap back  =>  (r, s) -> (r, 2s)
+    /// - VEven:  double r                        =>  (r, s) -> (2r, s)
+    /// - UGtV:   swap; s += r; double r; swap   =>  (r, s) -> (r+s, 2s)
+    /// - VGtU:   s += r; double r                =>  (r, s) -> (2r, r+s)
+    pub fn rs_matrix(self) -> Mat2 {
+        match self {
+            KCase::UEven => Mat2 { a00: 1, a01: 0, a10: 0, a11: 2 },
+            KCase::VEven => Mat2 { a00: 2, a01: 0, a10: 0, a11: 1 },
+            KCase::UGtV  => Mat2 { a00: 1, a01: 1, a10: 0, a11: 2 },
+            KCase::VGtU  => Mat2 { a00: 2, a01: 0, a10: 1, a11: 1 },
+        }
+    }
+}
 #[inline(always)]
 fn kaliski_case(u: U256, v: U256) -> KCase {
     if !u.bit(0) {
@@ -120,7 +139,8 @@ fn kaliski_step_uv(u: U256, v: U256) -> (U256, U256, KCase) {
 pub struct WindowObs {
     pub low_u: u16,
     pub low_v: u16,
-    pub mat: Mat2,
+    pub uv_mat: Mat2,
+    pub rs_mat: Mat2,
     pub cases: Vec<KCase>,
 }
 
@@ -135,17 +155,19 @@ pub fn observe_window(mut u: U256, mut v: U256, w: usize, t: usize) -> (U256, U2
     };
     let low_u = (u & low_mask).to::<u16>();
     let low_v = (v & low_mask).to::<u16>();
-    let mut mat = Mat2::ID;
+    let mut uv_mat = Mat2::ID;
+    let mut rs_mat = Mat2::ID;
     let mut cases = Vec::with_capacity(t);
     for _ in 0..t {
         if v.is_zero() { break; }
         let (nu, nv, kc) = kaliski_step_uv(u, v);
-        mat = kc.matrix().mul(mat);
+        uv_mat = kc.uv_matrix().mul(uv_mat);
+        rs_mat = kc.rs_matrix().mul(rs_mat);
         cases.push(kc);
         u = nu;
         v = nv;
     }
-    (u, v, WindowObs { low_u, low_v, mat, cases })
+    (u, v, WindowObs { low_u, low_v, uv_mat, rs_mat, cases })
 }
 
 pub struct Sampler {
@@ -176,15 +198,27 @@ impl Sampler {
 pub struct HybridStats {
     pub inputs: usize,
     pub windows: usize,
-    pub distinct_global_mats: usize,
-    pub max_entry_abs: i128,
-    pub mean_log2_entry_abs: f64,
+
+    pub distinct_global_uv_mats: usize,
+    pub distinct_global_rs_mats: usize,
+
+    pub max_uv_entry_abs: i128,
+    pub mean_log2_uv_entry_abs: f64,
+    pub max_rs_entry_abs: i128,
+    pub mean_log2_rs_entry_abs: f64,
+
     pub low_classes_seen: usize,
-    pub mean_mats_per_class: f64,
-    pub max_mats_per_class: usize,
-    pub singleton_classes: usize,
-    pub most_common_class_count: usize,
-    pub most_common_class: Option<(u16, u16)>,
+    pub mean_uv_mats_per_class: f64,
+    pub max_uv_mats_per_class: usize,
+    pub singleton_uv_classes: usize,
+    pub most_common_uv_class_count: usize,
+    pub most_common_uv_class: Option<(u16, u16)>,
+
+    pub mean_rs_mats_per_class: f64,
+    pub max_rs_mats_per_class: usize,
+    pub singleton_rs_classes: usize,
+    pub most_common_rs_class_count: usize,
+    pub most_common_rs_class: Option<(u16, u16)>,
 }
 
 /// Sample actual secp256k1 Kaliski trajectories and measure the compressibility
@@ -196,67 +230,101 @@ pub fn hybrid_kaliski_window_survey(
     t: usize,
 ) -> HybridStats {
     let mut sampler = Sampler::new(seed, SECP256K1_P);
-    let mut global_mats: BTreeSet<Mat2> = BTreeSet::new();
-    let mut by_class: BTreeMap<(u16, u16), BTreeSet<Mat2>> = BTreeMap::new();
+    let mut global_uv_mats: BTreeSet<Mat2> = BTreeSet::new();
+    let mut global_rs_mats: BTreeSet<Mat2> = BTreeSet::new();
+    let mut by_class_uv: BTreeMap<(u16, u16), BTreeSet<Mat2>> = BTreeMap::new();
+    let mut by_class_rs: BTreeMap<(u16, u16), BTreeSet<Mat2>> = BTreeMap::new();
     let mut windows = 0usize;
-    let mut max_entry_abs = 0i128;
-    let mut sum_log2_entry_abs = 0.0f64;
-    let mut counted_mats = 0usize;
+    let mut max_uv_entry_abs = 0i128;
+    let mut sum_log2_uv_entry_abs = 0.0f64;
+    let mut counted_uv_mats = 0usize;
+    let mut max_rs_entry_abs = 0i128;
+    let mut sum_log2_rs_entry_abs = 0.0f64;
+    let mut counted_rs_mats = 0usize;
 
     for _ in 0..n_inputs {
         let mut u = SECP256K1_P;
         let mut v = sampler.next();
-        // Use the same deterministic iteration budget as the BY survey.
         for _ in 0..742 {
             if v.is_zero() { break; }
             let (nu, nv, obs) = observe_window(u, v, w, t);
-            global_mats.insert(obs.mat);
-            by_class.entry((obs.low_u, obs.low_v)).or_default().insert(obs.mat);
-            let abs = obs.mat.max_abs();
-            if abs > max_entry_abs { max_entry_abs = abs; }
-            if abs > 0 {
-                sum_log2_entry_abs += (abs as f64).log2();
-                counted_mats += 1;
+            global_uv_mats.insert(obs.uv_mat);
+            global_rs_mats.insert(obs.rs_mat);
+            by_class_uv.entry((obs.low_u, obs.low_v)).or_default().insert(obs.uv_mat);
+            by_class_rs.entry((obs.low_u, obs.low_v)).or_default().insert(obs.rs_mat);
+            let uv_abs = obs.uv_mat.max_abs();
+            if uv_abs > max_uv_entry_abs { max_uv_entry_abs = uv_abs; }
+            if uv_abs > 0 {
+                sum_log2_uv_entry_abs += (uv_abs as f64).log2();
+                counted_uv_mats += 1;
+            }
+            let rs_abs = obs.rs_mat.max_abs();
+            if rs_abs > max_rs_entry_abs { max_rs_entry_abs = rs_abs; }
+            if rs_abs > 0 {
+                sum_log2_rs_entry_abs += (rs_abs as f64).log2();
+                counted_rs_mats += 1;
             }
             windows += 1;
-            // Advance ONE step only; windows overlap. This matches the eventual
-            // use-case: at runtime we would choose whether to batch starting at
-            // every cycle boundary.
             let (u1, v1, _kc) = kaliski_step_uv(u, v);
             u = u1;
             v = v1;
         }
     }
 
-    let low_classes_seen = by_class.len();
-    let mut total_mats_per_class = 0usize;
-    let mut max_mats_per_class = 0usize;
-    let mut singleton_classes = 0usize;
-    let mut most_common_class_count = 0usize;
-    let mut most_common_class = None;
-    for (cls, mats) in &by_class {
+    let low_classes_seen = by_class_uv.len();
+
+    let mut total_uv_mats_per_class = 0usize;
+    let mut max_uv_mats_per_class = 0usize;
+    let mut singleton_uv_classes = 0usize;
+    let mut most_common_uv_class_count = 0usize;
+    let mut most_common_uv_class = None;
+    for (cls, mats) in &by_class_uv {
         let c = mats.len();
-        total_mats_per_class += c;
-        if c > max_mats_per_class { max_mats_per_class = c; }
-        if c == 1 { singleton_classes += 1; }
-        if c > most_common_class_count {
-            most_common_class_count = c;
-            most_common_class = Some(*cls);
+        total_uv_mats_per_class += c;
+        if c > max_uv_mats_per_class { max_uv_mats_per_class = c; }
+        if c == 1 { singleton_uv_classes += 1; }
+        if c > most_common_uv_class_count {
+            most_common_uv_class_count = c;
+            most_common_uv_class = Some(*cls);
+        }
+    }
+
+    let mut total_rs_mats_per_class = 0usize;
+    let mut max_rs_mats_per_class = 0usize;
+    let mut singleton_rs_classes = 0usize;
+    let mut most_common_rs_class_count = 0usize;
+    let mut most_common_rs_class = None;
+    for (cls, mats) in &by_class_rs {
+        let c = mats.len();
+        total_rs_mats_per_class += c;
+        if c > max_rs_mats_per_class { max_rs_mats_per_class = c; }
+        if c == 1 { singleton_rs_classes += 1; }
+        if c > most_common_rs_class_count {
+            most_common_rs_class_count = c;
+            most_common_rs_class = Some(*cls);
         }
     }
 
     HybridStats {
         inputs: n_inputs,
         windows,
-        distinct_global_mats: global_mats.len(),
-        max_entry_abs,
-        mean_log2_entry_abs: if counted_mats == 0 { 0.0 } else { sum_log2_entry_abs / counted_mats as f64 },
+        distinct_global_uv_mats: global_uv_mats.len(),
+        distinct_global_rs_mats: global_rs_mats.len(),
+        max_uv_entry_abs,
+        mean_log2_uv_entry_abs: if counted_uv_mats == 0 { 0.0 } else { sum_log2_uv_entry_abs / counted_uv_mats as f64 },
+        max_rs_entry_abs,
+        mean_log2_rs_entry_abs: if counted_rs_mats == 0 { 0.0 } else { sum_log2_rs_entry_abs / counted_rs_mats as f64 },
         low_classes_seen,
-        mean_mats_per_class: if low_classes_seen == 0 { 0.0 } else { total_mats_per_class as f64 / low_classes_seen as f64 },
-        max_mats_per_class,
-        singleton_classes,
-        most_common_class_count,
-        most_common_class,
+        mean_uv_mats_per_class: if low_classes_seen == 0 { 0.0 } else { total_uv_mats_per_class as f64 / low_classes_seen as f64 },
+        max_uv_mats_per_class,
+        singleton_uv_classes,
+        most_common_uv_class_count,
+        most_common_uv_class,
+        mean_rs_mats_per_class: if low_classes_seen == 0 { 0.0 } else { total_rs_mats_per_class as f64 / low_classes_seen as f64 },
+        max_rs_mats_per_class,
+        singleton_rs_classes,
+        most_common_rs_class_count,
+        most_common_rs_class,
     }
 }
 
@@ -270,7 +338,8 @@ mod tests {
         let v = U256::from(123456789u64);
         let (_u2, _v2, obs) = observe_window(u, v, 8, 4);
         assert!(obs.cases.len() >= 1);
-        assert!(obs.mat.max_abs() >= 1);
+        assert!(obs.uv_mat.max_abs() >= 1);
+        assert!(obs.rs_mat.max_abs() >= 1);
     }
 
     #[test]
@@ -278,22 +347,33 @@ mod tests {
         for &(w, t) in &[(6usize, 4usize), (8usize, 4usize), (8usize, 6usize)] {
             let s = hybrid_kaliski_window_survey(b"hybrid-kaliski-window-seed-v1", 10_000, w, t);
             eprintln!("=== hybrid Kaliski window survey (w={}, t={}) ===", w, t);
-            eprintln!("inputs               : {}", s.inputs);
-            eprintln!("windows              : {}", s.windows);
-            eprintln!("distinct global mats : {}", s.distinct_global_mats);
-            eprintln!("max |entry|          : {}", s.max_entry_abs);
-            eprintln!("mean log2 |entry|    : {:.3}", s.mean_log2_entry_abs);
-            eprintln!("classes seen         : {}", s.low_classes_seen);
-            eprintln!("mean mats/class      : {:.3}", s.mean_mats_per_class);
-            eprintln!("max mats/class       : {}", s.max_mats_per_class);
-            eprintln!("singleton classes    : {}", s.singleton_classes);
-            eprintln!("most common class ct : {}", s.most_common_class_count);
-            if let Some((ucls, vcls)) = s.most_common_class {
-                eprintln!("most common class    : (u_low={}, v_low={})", ucls, vcls);
+            eprintln!("inputs                  : {}", s.inputs);
+            eprintln!("windows                 : {}", s.windows);
+            eprintln!("distinct global uv mats : {}", s.distinct_global_uv_mats);
+            eprintln!("distinct global rs mats : {}", s.distinct_global_rs_mats);
+            eprintln!("max |uv entry|          : {}", s.max_uv_entry_abs);
+            eprintln!("mean log2 |uv entry|    : {:.3}", s.mean_log2_uv_entry_abs);
+            eprintln!("max |rs entry|          : {}", s.max_rs_entry_abs);
+            eprintln!("mean log2 |rs entry|    : {:.3}", s.mean_log2_rs_entry_abs);
+            eprintln!("classes seen            : {}", s.low_classes_seen);
+            eprintln!("mean uv mats/class      : {:.3}", s.mean_uv_mats_per_class);
+            eprintln!("max uv mats/class       : {}", s.max_uv_mats_per_class);
+            eprintln!("singleton uv classes    : {}", s.singleton_uv_classes);
+            eprintln!("most common uv class ct : {}", s.most_common_uv_class_count);
+            if let Some((ucls, vcls)) = s.most_common_uv_class {
+                eprintln!("most common uv class    : (u_low={}, v_low={})", ucls, vcls);
+            }
+            eprintln!("mean rs mats/class      : {:.3}", s.mean_rs_mats_per_class);
+            eprintln!("max rs mats/class       : {}", s.max_rs_mats_per_class);
+            eprintln!("singleton rs classes    : {}", s.singleton_rs_classes);
+            eprintln!("most common rs class ct : {}", s.most_common_rs_class_count);
+            if let Some((ucls, vcls)) = s.most_common_rs_class {
+                eprintln!("most common rs class    : (u_low={}, v_low={})", ucls, vcls);
             }
             eprintln!("===============================================");
             assert!(s.windows > 0);
-            assert!(s.distinct_global_mats >= 1);
+            assert!(s.distinct_global_uv_mats >= 1);
+            assert!(s.distinct_global_rs_mats >= 1);
         }
     }
 }

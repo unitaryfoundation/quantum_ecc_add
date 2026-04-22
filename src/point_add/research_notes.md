@@ -123,6 +123,34 @@ But the compression result changes the local-batching story.
 - Only for GF(2^n), not GF(p).
 - Not applicable to secp256k1.
 
+## Stronger result: coefficient-side compression matches (u, v) compression
+
+A remaining risk in the hybrid Kaliski-jump idea was that even if the `(u, v)`
+window transition family compressed well, the coefficient-side `(r, s)`
+transforms might explode and ruin the QROM story.
+
+I derived the per-case coefficient matrices directly from the implemented
+`kaliski_iteration` logic:
+
+- UEven: `(r, s) -> (r, 2s)`
+- VEven: `(r, s) -> (2r, s)`
+- UGtV : `(r, s) -> (r+s, 2s)`
+- VGtU : `(r, s) -> (2r, r+s)`
+
+Then I ran the same exact 10,000-input window survey for those coefficient-side
+matrices.
+
+**Result:** the `(r, s)` side compresses **identically** to the `(u, v)` side.
+
+| w | t | distinct uv mats | distinct rs mats | max `|uv|` | max `|rs|` | mean mats/class |
+|---|---:|---:|---:|---:|---:|---:|
+| 6 | 4 | 125  | 125  | 16 | 16 | 4.506 |
+| 8 | 4 | 125  | 125  | 16 | 16 | 4.493 |
+| 8 | 6 | 1133 | 1133 | 64 | 64 | 9.461 |
+
+This is the strongest empirical evidence so far that **hybrid Kaliski-jump**
+is a coherent moonshot and not just a half-broken idea.
+
 ## Current best moonshot conclusion
 
 **Conclusion: `hybrid Kaliski-jump is the bet.`**
@@ -192,33 +220,21 @@ Interpretation:
 - Each low-bit class sees only about 4.5 matrices on average.
 - For **t = 6**, the matrix family is still modest (1,133 matrices), and
   coefficients only grow to 64.
+- Crucially, the coefficient-side `(r, s)` matrices compress the same way,
+  so the hybrid doesn't immediately die on the cleanup side.
 
-This is a *much* stronger compression phenomenon than in full B-Y jumpdivsteps.
-It suggests that Kaliski-local batching may be practical with a very small
-matrix alphabet.
-
-### Why this is promising
-Kaliski's profile hot spots are:
-- step 4 (cond-sub / cond-add pair),
-- step 3+9 (double cswap),
-- step 0/1/2 branch logic.
-
-A 4-step batched local update could replace **four full rounds** of this
-logic with:
-1. determine low-bit class,
-2. lookup one of only ~125 matrices,
-3. apply it to `(u, v_w)`,
-4. update `(r, s)` or equivalent coefficient state consistently,
-5. keep existing cleanup structure as much as possible.
-
-This is now the most compelling structural moonshot in the codebase.
+This is a *much* stronger compression phenomenon than in full jumped-BY and is
+currently the strongest empirical structural lead in the project.
 
 ## Proposed next sessions
 
-### P1. Enumerate exact coefficient-side transforms for 4-step Kaliski windows
-Current `kaliski_jump.rs` only studies `(u, v)` transition matrices.
-Next step is to derive the corresponding transform on the coefficient-side
-state `(r, s)` for the same 4-step windows.
+### P1. Enumerate exact branch-class representatives for `t = 4`
+For the 125 observed 4-step matrices, enumerate:
+- a canonical representative branch sequence,
+- exact parity/ordering preconditions,
+- exact `(u, v)` low-bit regions mapping to each matrix.
+
+This is the step needed before any reversible QROM design.
 
 ### P2. Build a reversible cost model for a 125-matrix QROM
 Now that the matrix alphabet is only ~125 elements for `t=4`, the next work is
@@ -226,7 +242,8 @@ not abstract algorithmics but concrete reversible cost accounting:
 - raw lookup,
 - compressed-class lookup,
 - select-swap QROM,
-- matrix-apply on 256-bit regs.
+- matrix-apply on 256-bit regs,
+- cleanup interaction with existing `m_hist`.
 
 ### P3. Decide whether `t=4` or `t=6` is the sweet spot
 `t=4` gives only 125 matrices with max coefficient 16.
@@ -239,7 +256,8 @@ The strongest current research judgement is:
 
 > The best moonshot is **not** full B-Y replacement.
 > The best moonshot is **hybrid Kaliski-jump batching** over short windows,
-> because the exact local transition family appears to be very small.
+> because the exact local transition family is very small on both the state
+> side `(u, v_w)` and the coefficient side `(r, s)`.
 
-This is still novel research — but unlike the other moonshots, it now has
+That's still novel research, but unlike the other moonshots, it now has
 clear empirical support directly tied to the 81%-of-budget hot path.

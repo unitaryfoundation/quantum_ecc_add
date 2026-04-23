@@ -3076,6 +3076,7 @@ fn bulk_prefix_safe_iters() -> usize {
 /// worked out.
 fn kaliski_iteration_bulk_prefix3(
     b: &mut B,
+    p: U256,
     u: &[QubitId],
     v_w: &[QubitId],
     r: &[QubitId],
@@ -3203,7 +3204,11 @@ fn kaliski_iteration_bulk_prefix3(
 
     b.set_phase("kal_bulk_step6_7_8");
     for i in 0..(u.len() - 1) { b.swap(v_w[i], v_w[i + 1]); }
-    mod_double_no_corr(b, r);
+    if iter_idx < R_SMALL_THRESHOLD {
+        mod_double_no_corr(b, r);
+    } else {
+        mod_double_inplace_fast(b, r, p);
+    }
 
     b.set_phase("kal_bulk_step9_cswap");
     for j in 0..u.len() { cswap(b, a_f, u[j], v_w[j]); }
@@ -3565,7 +3570,7 @@ fn kaliski_forward(b: &mut B, v_in: &[QubitId], st: &KaliskiState, p: U256, iter
     for i in 0..iters {
         if use_bulk_prefix3 && i < bulk_prefix_iters {
             kaliski_iteration_bulk_prefix3(
-                b, &st.u, &st.v_w, &st.r, &st.s,
+                b, p, &st.u, &st.v_w, &st.r, &st.s,
                 st.m_hist[i],
                 i,
             );

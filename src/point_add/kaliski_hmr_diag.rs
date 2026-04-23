@@ -44,7 +44,7 @@ fn build_special_step0() -> Vec<HmrOp> {
     let r = b.alloc_qubits(N);
     let s = b.alloc_qubits(N);
     let m = b.alloc_qubit();
-    kaliski_iteration_bulk_prefix3(&mut b, &u, &v, &r, &s, m, 0);
+    kaliski_iteration_bulk_prefix3(&mut b, SECP256K1_P, &u, &v, &r, &s, m, 0);
     extract_hmrs(&b.ops)
 }
 

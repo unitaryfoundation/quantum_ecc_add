@@ -3055,7 +3055,7 @@ const R_SMALL_THRESHOLD: usize = 255;
 /// `2^256`. Termination requires reaching `(1, 0)`, i.e. `s = 1`, so any run
 /// needs at least `ceil(log2(s0)) = 256` steps. Therefore the first 256 step
 /// entries are guaranteed bulk / nonterminal.
-const BULK_PREFIX_SAFE_ITERS: usize = 32;
+const BULK_PREFIX_SAFE_ITERS: usize = 304;
 
 fn bulk_prefix_safe_iters() -> usize {
     std::env::var("KAL_BULK3_ITERS")

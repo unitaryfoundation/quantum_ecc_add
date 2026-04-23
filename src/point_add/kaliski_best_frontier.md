@@ -24,7 +24,8 @@ the current best strict `main.rs`-validated passing settings found so far are:
 | 326 | 4,241,946 |
 
 ## Best strict result so far
-- `KAL_BULK3_ITERS = 304`
+- with `KAL_BULK3_EXPERIMENT=1`
+- and default `BULK_PREFIX_SAFE_ITERS = 304`
 - avg executed Toffoli = **4,236,292**
 - savings vs baseline `4,394,546` = **158,254**
 

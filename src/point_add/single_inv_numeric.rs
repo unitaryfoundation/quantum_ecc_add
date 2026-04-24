@@ -516,6 +516,88 @@ mod tests {
         assert_eq!(ry_ok, 200);
     }
 
+    /// Falsification test for B2: at Kaliski body exit we have the
+    /// registers {tx=Rx (or Rx-Qx), ty=Ry, dx_orig=dx, inv_raw=-dx⁻¹·2^{2n-1}}
+    /// plus the classical constants ox=Qx, oy=Qy.
+    /// Can -λ be expressed as a small-cost polynomial combination of these?
+    ///
+    /// Enumerate a catalogue of candidate expressions (each one corresponds
+    /// to a tiny mul/add sequence, ~1–3 muls of cost ~150k each). If ANY
+    /// candidate equals -λ on 200 random trials, B2 is alive. If NONE do,
+    /// B2 is dead.
+    #[test]
+    fn strategy_b2_lam_copy_uncompute_falsification() {
+        let p = SECP256K1_P;
+        // Candidate functions: take (rx, ry, qx, qy, dx, dx_inv) → guess for -λ.
+        type Cand = fn(U256, U256, U256, U256, U256, U256, U256) -> U256;
+        let neg = |a: U256| sub_mod(U256::ZERO, a, p);
+        let _ = neg;
+
+        // Polynomial in {rx, ry, qx, qy, dx, dx_inv, dx_inv^2}. dx_inv^2 is
+        // "free" relative to adding a new inversion: it's one extra mul.
+        let candidates: &[(&str, Cand)] = &[
+            ("(Ry+Qy)·dx_inv", |_rx, ry, _qx, qy, _dx, dx_inv, _| {
+                ry.add_mod(qy, SECP256K1_P).mul_mod(dx_inv, SECP256K1_P)
+            }),
+            ("-(Ry+Qy)·dx_inv", |_rx, ry, _qx, qy, _dx, dx_inv, _| {
+                sub_mod(U256::ZERO, ry.add_mod(qy, SECP256K1_P).mul_mod(dx_inv, SECP256K1_P), SECP256K1_P)
+            }),
+            ("(Qy-Ry)·dx_inv", |_rx, ry, _qx, qy, _dx, dx_inv, _| {
+                sub_mod(qy, ry, SECP256K1_P).mul_mod(dx_inv, SECP256K1_P)
+            }),
+            ("(Ry-Qy)·dx_inv", |_rx, ry, _qx, qy, _dx, dx_inv, _| {
+                sub_mod(ry, qy, SECP256K1_P).mul_mod(dx_inv, SECP256K1_P)
+            }),
+            ("(Rx-Qx)·dx_inv", |rx, _ry, qx, _qy, _dx, dx_inv, _| {
+                sub_mod(rx, qx, SECP256K1_P).mul_mod(dx_inv, SECP256K1_P)
+            }),
+            ("dx_inv_sq", |_rx, _ry, _qx, _qy, _dx, _dx_inv, dx_inv_sq| dx_inv_sq),
+            ("(Ry+Qy)·dx_inv_sq", |_rx, ry, _qx, qy, _dx, _dx_inv, dx_inv_sq| {
+                ry.add_mod(qy, SECP256K1_P).mul_mod(dx_inv_sq, SECP256K1_P)
+            }),
+            ("(Rx-Qx)·dx_inv_sq", |rx, _ry, qx, _qy, _dx, _dx_inv, dx_inv_sq| {
+                sub_mod(rx, qx, SECP256K1_P).mul_mod(dx_inv_sq, SECP256K1_P)
+            }),
+            ("dx·dx_inv_sq", |_rx, _ry, _qx, _qy, dx, _dx_inv, dx_inv_sq| {
+                dx.mul_mod(dx_inv_sq, SECP256K1_P)
+            }),
+            ("(Rx+Qx)·dx_inv", |rx, _ry, qx, _qy, _dx, dx_inv, _| {
+                rx.add_mod(qx, SECP256K1_P).mul_mod(dx_inv, SECP256K1_P)
+            }),
+        ];
+
+        let mut hits = vec![0usize; candidates.len()];
+        let mut total = 0usize;
+        each_trial(|px, py, qx, qy, rx_ref, ry_ref| {
+            total += 1;
+            let dx = sub_mod(px, qx, p);
+            let dy = sub_mod(py, qy, p);
+            let lam = dy.mul_mod(dx.inv_mod(p).unwrap(), p);
+            let neg_lam = sub_mod(U256::ZERO, lam, p);
+            let dx_inv = dx.inv_mod(p).unwrap();
+            let dx_inv_sq = dx_inv.mul_mod(dx_inv, p);
+            for (i, (_name, f)) in candidates.iter().enumerate() {
+                let got = f(rx_ref, ry_ref, qx, qy, dx, dx_inv, dx_inv_sq);
+                if got == neg_lam {
+                    hits[i] += 1;
+                }
+            }
+        });
+        let mut any_matched_all = false;
+        for (i, (name, _)) in candidates.iter().enumerate() {
+            eprintln!("  candidate {name}: {}/{} matches -λ", hits[i], total);
+            if hits[i] == total {
+                any_matched_all = true;
+            }
+        }
+        assert!(
+            !any_matched_all,
+            "B2 rescued: a low-cost polynomial expression in {{Rx, Ry, Qx, Qy, dx, dx⁻¹, dx⁻²}} \
+             matches -λ on all trials; re-examine the obstruction"
+        );
+        eprintln!("B2 falsification: no low-cost polynomial in {{Rx, Ry, Qx, Qy, dx, dx⁻¹, dx⁻²}} equals -λ. B2 DEAD.");
+    }
+
     #[test]
     fn strategy_c_passes_200() {
         // Strategy C: invert w = dx³, recover both Rx and Ry from it.

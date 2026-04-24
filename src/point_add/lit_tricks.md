@@ -1,0 +1,189 @@
+# Algebraic & scheduling tricks from the literature we have NOT used
+
+Mined from `/tmp/*.pdf` + arxiv queries, 2026-04-24 session. Ordered by
+expected impact for our "n=256 secp256k1 point-add, ~600 qubits over the
+512-qubit input register" target.
+
+## 1. Luo 2025 — register sharing via the EEA invariant  (BIG qubit win)
+
+arXiv (retrieved to `/tmp/luo_ec.pdf`, `.txt`). Reports full Shor's
+ECDLP on secp256k1 in **1333 total qubits** (vs HRSL 2020's 2124, vs
+RNSL 2017's 2338, vs our 2716 for one point-add).
+
+Central trick: the Extended Euclidean Algorithm produces two sequences
+`{r_i}` (monotonically decreasing) and `{t_i}` (monotonically
+increasing) with the bilinear invariant
+
+    r_{i-1} · t_i + r_i · t_{i-1} = p       (over the whole run)
+
+This means `bitlen(r_{i-1}) + bitlen(t_i) ≤ n+1`, so the two values
+**share a single n+2 qubit register** with a known split. Luo pushes
+this further: `(r_{i-1}, t_i, q_i)` can all share one n+2 register.
+Net saving for the inversion state: from our current `4n + iters`
+(= `4·256 + 407 = 1431` qubits) down to **~n+O(log n)**, saving ~3n ≈
+**768 qubits** at n=256. That alone cuts our 2716q peak to roughly
+1950q — below the 2800q session cap even before any Toffoli work.
+
+Cost: Luo uses a long-division-style EEA (Proos-Zalka shape), not
+Kaliski's halving-based one, so the per-round Toffoli profile is
+different. Their full Shor-algorithm Toffoli count is ~976 n³ =
+~1.6·10¹⁰ for n=256 whole-algorithm; extracting per-point-add requires
+dividing by the 2n=512 point-adds, giving ~3.1·10⁷ Toffoli per point-add
+— worse than our 4.18M on raw count. So this is a qubit-vs-Toffoli
+tradeoff: Luo wins qubits by 50%, loses Toffoli by ~7x at the same n.
+
+**Takeaway:** register sharing is the single biggest-ticket qubit lever
+we're not using. BUT implementing it means switching from our
+Kaliski/swap formulation to a PZ/long-division formulation — a total
+rewrite of `with_kal_inv_raw` and friends. Multi-week effort.
+
+## 2. Kim 2026 — unconditional execution + postponed modular reduction
+
+Paper `/tmp/kim_2026.pdf`. Two linked tricks, Section 3.3.1:
+
+### 2a. Unconditional execution
+Run **all 2n Kaliski rounds unconditionally** — no `v==0` check in any
+round. In the rounds after termination, r keeps being doubled into a
+2n-bit r register (the arithmetic "overshoots" cleanly). The result is
+**already in Montgomery form `x⁻¹ · 2ⁿ mod p` on the nose, every shot.**
+
+Consequence: **no `pair1_halve` or `pair2_double` correction loops**.
+Our current build pays
+- pair1_halve: 103,785 CCX
+- pair2_double: 103,020 CCX
+
+**Direct saving: ~207k CCX (~5.0% of total)** just from eliminating
+these two phases. Wireable into our existing scaffold with minimal
+structural changes; the `with_kal_inv_raw` body would just skip the
+halve/double loops.
+
+### 2b. Postponed modular reduction
+Inside each Kaliski round, the v←v-u, r←2r, etc. ops can defer their
+mod-p reduction to the final stage. Accumulate into a 2n-bit register
+across all rounds; do one big reduction at the end using a QCSA
+(quantum carry-save adder) or sequential controlled additions.
+
+Our current `kaliski_iteration` already does modular reduction inside
+each round (for r via `mod_double_inplace_fast`/`mod_double_no_corr`
+and for s similarly). Eliminating that per-round reduction saves
+roughly `O(n) CCX per round × 2n rounds = O(n²)` CCX — napkin estimate
+for n=256 puts this in the same ballpark as the inversion cost itself.
+
+**Takeaway:** 2a alone is low-risk, ~5% win, probably 1-day
+implementation. 2b is deeper and higher-value but wants a register
+size change (2n-bit r) that we currently don't accommodate.
+
+## 3. HRSL 2020 — register reuse across inversion and multiplication
+
+Paper `/tmp/hrsl_2020.pdf`, Fig. 8b. Modular **division** `y/x` is
+composed as: invert x (via Kaliski into aux registers), copy-out, undo
+the Bennett wrapper. At that point three of the aux registers hold the
+known values `{0, 1, p}`. HRSL: **clear them with n X-gates and reuse
+them as the workspace for the multiply `y · x⁻¹`**.
+
+Net peak qubit count for divide: ~8n instead of 8n+3n. Saves 3n = 768
+qubits during a divide, exactly the workspace size we need to stay
+under our cap.
+
+Our current `with_kal_inv_raw` frees `u`, `v_w`, `f_flag` after the
+forward pass (already a reuse). We do NOT currently fold the mul
+workspace into that reuse: pair1_mul2 allocates its own tmp_ext (2n)
+and carries (n). Wiring the mul to reuse the freed Kaliski registers
+would save the mul's tmp_ext allocation, potentially ~512 qubits of
+transient peak.
+
+**Takeaway:** medium-risk scheduling rewrite. Requires threading the
+mul's allocator through `with_kal_inv_raw` so the freed u/v_w slots
+get reused instead of new alloc. Could turn a 258q transient into a
+0q transient at the pair1_mul2 peak, finally making karatsuba-1
+fit in budget at pair1_mul2.
+
+## 4. HRSL 2020 — swap-based Kaliski round
+
+Same paper, Fig. 7b / Algorithm 7b. Instead of our current 4-branch
+structure (one of 4 sub-operations per round), use:
+- 2 controlled swaps (u↔v, r↔s) at the beginning
+- 1 subtraction `v ← v - u` conditioned on `u odd AND v odd`
+- 1 addition `s ← r + s` same condition
+- 1 unconditional `v ← v/2`
+- 1 unconditional `r ← 2r`
+- 2 controlled swaps at the end to undo
+
+One subtract + one add per round, vs our four. We partially implement
+this via `kaliski_iteration_bulk_prefix3` for the first 315 rounds;
+the generic `kaliski_iteration` still carries the 4-branch machinery.
+
+**Takeaway:** fold the swap-based formulation into the full 407/404
+iters (not just the bulk prefix). Estimated Toffoli saving: ~500k CCX
+across both Kaliskis (roughly 2 of our 4 step4-style ops per round
+disappear). Needs very careful phase-correctness work — the partial
+bulk-prefix3 is the template.
+
+## 5. Gidney 2019 — windowed classical-quantum addition
+
+Paper `/tmp/gidney_windowed_2019.pdf`. Replace k back-to-back
+`quantum_reg += classical_const_i` operations with a single QROM
+lookup of the sum-of-k-constants followed by one add. Cost:
+`O(W·L/k + k)` Toffoli where `W = n` and `L = 2^k`.
+
+Applies to our `mod_add_qb`, `mod_sub_qb`, `mod_add_double_qb` calls.
+In current build we have ~6 such calls × ~1280 CCX = ~7680 CCX total.
+Windowing would cut this by a factor of ~4-8 on the per-op cost,
+saving ~6000 CCX. Small absolute win.
+
+**Takeaway:** low-impact, skip for now.
+
+## 6. Boneh's Montgomery batch inversion trick
+
+Actually a Montgomery/Peter-Montgomery technique but widely
+attributed to Boneh (Stanford crypto course material, BLS signature
+paper context). Bundle two inversions into one:
+
+    a⁻¹ = b · (ab)⁻¹
+    b⁻¹ = a · (ab)⁻¹
+
+Already explored in Strategy A of `single_inv_plan.md`. Result:
+**DEAD** because the Py term gets trapped in the ty register as `ty=Py+Ry`
+and we have no classical handle on Py to subtract it out.
+
+**Takeaway:** Boneh's trick is not a new avenue for us — it was
+Strategy A, confirmed dead by the 200-trial falsification harness.
+
+## 7. Chevignard 2026 — RNS + projective coords
+
+Paper `/tmp/chevignard_2026.pdf`. Uses Residue Number System
+representation + projective coordinates, avoiding the modular
+inversion entirely inside the point-add loop by maintaining `(X:Y:Z)`
+and only dividing by Z at the end.
+
+Not applicable to our session's contract: our `src/main.rs` harness
+requires `(Rx, Ry)` to be written into the SAME quantum registers as
+the input `(Px, Py)`, in affine form. A projective representation
+would require a full RNS-to-affine conversion which itself is an
+inversion — no saving.
+
+**Takeaway:** not applicable, ruled out previously.
+
+---
+
+## Prioritised moves for next session
+
+Ranked by impact × ease:
+
+| # | trick | impact (CCX save) | qubit ∆ | implementation risk |
+|---|-------|------------------:|--------:|----------------------|
+| 1 | Kim 2a (unconditional exec, skip halve/double) | **-207k** | ~0 | LOW (touches with_kal_inv_raw) |
+| 2 | HRSL swap-based full Kaliski | -400k to -600k | 0 | MEDIUM (phase-correctness) |
+| 3 | HRSL register reuse for pair1_mul2 | 0 (enables -28k from k1 mul) | -258 peak | MEDIUM (allocator threading) |
+| 4 | Kim 2b (postponed mod reduction) | -300k to -500k | +n (r becomes 2n) | HIGH (rewrite of r arithmetic) |
+| 5 | Luo register sharing | 0 or negative Toffoli | **-768 peak** | VERY HIGH (rewrite Kaliski as PZ long-division) |
+
+Combined attainable with 1+2+3 (low+medium risk, no formulation
+rewrite): **~600-800k CCX saving (15-20%), ~250q peak saving**.
+Reaches ~3.4-3.6M Toffoli @ ~2460q.
+
+With Kim 2b added: ~3.0-3.2M @ 2460q. Close to Google SOTA low-qubit
+estimate of 2.7M @ 1175q on Toffoli count (though not on qubit count).
+
+With Luo on top: ~3.0M @ **~1700q**, which actually approaches Google's
+1175q regime but at a fraction of the qubit wins they claim.

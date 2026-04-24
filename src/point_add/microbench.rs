@@ -30,6 +30,7 @@ fn count_toffoli(ops: &[Op]) -> usize {
         .count()
 }
 
+#[derive(Clone, Copy)]
 struct Measured {
     total_qubits: u32,
     peak_qubits: u32,
@@ -243,12 +244,35 @@ mod tests {
         if !enabled() {
             return;
         }
-        print_row("mul_schoolbook_write_zero", &bench_mul_schoolbook_write());
-        print_row("mul_schoolbook_add", &bench_mul_add_schoolbook());
-        print_row("mul_karatsuba1_write_zero", &bench_mul_karatsuba_write());
-        print_row("mul_karatsuba1_add", &bench_mul_add_karatsuba());
-        print_row("mul_karatsuba2_write_zero", &bench_mul_karatsuba2_write());
-        print_row("mul_karatsuba2_add", &bench_mul_add_karatsuba2());
+        let sb_w = bench_mul_schoolbook_write();
+        let sb_a = bench_mul_add_schoolbook();
+        let k1_w = bench_mul_karatsuba_write();
+        let k1_a = bench_mul_add_karatsuba();
+        let k2_w = bench_mul_karatsuba2_write();
+        let k2_a = bench_mul_add_karatsuba2();
+        print_row("mul_schoolbook_write_zero", &sb_w);
+        print_row("mul_schoolbook_add", &sb_a);
+        print_row("mul_karatsuba1_write_zero", &k1_w);
+        print_row("mul_karatsuba1_add", &k1_a);
+        print_row("mul_karatsuba2_write_zero", &k2_w);
+        print_row("mul_karatsuba2_add", &k2_a);
+
+        // Summary deltas to drive structural choices at a glance.
+        println!(
+            "microbench | summary | schoolbook→karatsuba1: toff {:+}, peak {:+}",
+            k1_a.toffoli as i64 - sb_a.toffoli as i64,
+            k1_a.peak_qubits as i64 - sb_a.peak_qubits as i64
+        );
+        println!(
+            "microbench | summary | schoolbook→karatsuba2: toff {:+}, peak {:+}",
+            k2_a.toffoli as i64 - sb_a.toffoli as i64,
+            k2_a.peak_qubits as i64 - sb_a.peak_qubits as i64
+        );
+        println!(
+            "microbench | summary | karatsuba1→karatsuba2: toff {:+}, peak {:+}",
+            k2_a.toffoli as i64 - k1_a.toffoli as i64,
+            k2_a.peak_qubits as i64 - k1_a.peak_qubits as i64
+        );
         print_row(
             "schoolbook_addsub_fast   (forward+inverse)",
             &bench_schoolbook_addsub_pair(false),

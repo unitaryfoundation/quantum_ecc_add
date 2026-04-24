@@ -174,6 +174,28 @@ Eliminates m_hist (-409q). Case computed from state each iter, not stored.
 - **HRSL cumulative swap state**: +3.2M Toffoli, dead end.
 - **Toom-3 / Fermat / Edwards-coord swap**: analyzed and rejected.
 
+## Microbench findings (src/point_add/microbench.rs, `MICROBENCH=1 cargo test ...`)
+Measured local peak + Toffoli of isolated primitives at n=256 from commit 9509e82:
+
+| primitive                          | toffoli | peak qubits |
+|------------------------------------|--------:|------------:|
+| schoolbook (write/add)             | ~153k   | **1797**    |
+| karatsuba-1 (write/add)            | ~125k   | 2055        |
+| karatsuba-1 lowq (non-fast inner)  | 228k    | 2055        |
+| karatsuba-2 (write/add)            | ~114k   | 2315        |
+| schoolbook_addsub forward (fast)   |  67k    | 1283        |
+| schoolbook_addsub forward (lowq)   | 133k    | 1283        |
+
+Key implications:
+- schoolbook→karatsuba-1 is `-28k Toffoli, +258 peak`. The +258 is exactly the outer `2n` tmp_ext of karatsuba_forward, NOT Cuccaro carries.
+- Replacing fast carries with non-fast carries (`lowq` variants) does NOT reduce peak of karatsuba-1 below fast karatsuba-1. So "low-q Cuccaro inside the Kaliski-body mul" is NOT a real qubit lever.
+- Any path that gets karatsuba Toffoli gains under the 2800q cap must either (a) shrink the 2n tmp_ext itself, or (b) shrink persistent state (m_hist / lam / Kaliski registers) before the mul.
+- Single-site karatsuba-1 at pair1_mul2 or pair2_mul saves 28k but pushes peak to ~2972 (over cap).
+- Lowering pair iter count is on a phase cliff (pair1_iters=406 and pair2_iters=403 fail 24-seed gate).
+
+SOTA path implication (n=256, target ~1175-1425 qubits):
+- The structural bottleneck is the 2n=512 tmp_ext bulge stacked on top of ~2200 persistent Kaliski state. Closing the SOTA gap requires eliminating one full n-wide persistent register (m_hist compression, Kim unconditional without m_hist, or folding lam into an output register) AND compressing the mul tmp_ext at the same time. Small isolated substitutions cannot cross the qubit cap.
+
 ## Session-scale wins still possible (~50-200q, tens-of-k Toffoli)
 - **In-place step4 (eliminate tmp via Gidney measurement-AND)**: -256q at +~800k Toffoli. Needs careful HMR matching.
 - **Non-fast Cuccaro everywhere at peak**: -255q at +~300k Toffoli. Needs unified fwd/bwd variants.

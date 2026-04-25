@@ -603,3 +603,10 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1777090631	8a9737b	4181009.000	24470500.275	2716	31294378	OK	
 1777090667	8a9737b	4181516.000	24470161.462	2716	31294938	OK	
 1777090844	8a9737b	4180502.000	24470810.289	2716	31293818	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777111529	18c360e	4180502.000	24470810.289	2716	31293818	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777111787	18c360e	4179219.000	24476679.459	2716	31299020	FAIL	 | PHASE GARBAGE: global_phase = 0x131f250809857443 across 64 live shots (must be 0)
+1777111823	18c360e	4179219.000	24476679.459	2716	31299020	FAIL	 | PHASE GARBAGE: global_phase = 0x131f250809857443 across 64 live shots (must be 0)
+1777111860	18c360e	4179219.000	24476679.459	2716	31299020	FAIL	 | PHASE GARBAGE: global_phase = 0x131f250809857443 across 64 live shots (must be 0)
+1777111910	18c360e	4179219.000	24476679.459	2716	31299020	FAIL	 | PHASE GARBAGE: global_phase = 0x131f250809857443 across 64 live shots (must be 0)
+1777111954	18c360e	4179219.000	24476679.459	2716	31299020	FAIL	 | PHASE GARBAGE: global_phase = 0x131f250809857443 across 64 live shots (must be 0)
+1777112098	18c360e	4180502.000	24470810.289	2716	31293818	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 

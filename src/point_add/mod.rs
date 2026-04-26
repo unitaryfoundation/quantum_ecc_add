@@ -4145,11 +4145,17 @@ fn kaliski_iteration_bulk_prefix3(
     b.cx(b_f, add_f);
     {
         let n = u.len();
+        // Narrow load/sub width to the late-iter bound (same formula as sub_width).
+        // Before this fix: load_width = n, sub_width = max(2n-k, n) → load too wide.
+        // After: load_width = sub_width = max(2n-iter_idx, n). Saves n CCX/qubits per iter.
+        let load_width = if iter_idx < n { n } else { 2 * n - iter_idx };
         let tmp = b.alloc_qubits(n);
-        for i in 0..n {
+        for i in 0..load_width {
             b.ccx(add_f, u[i], tmp[i]);
         }
-        sub_nbit_qq_fast(b, &tmp, v_w);
+        // Narrow load/sub width to the late-iter bound.
+        // Both tmp and v_w are 256 qubits. Use slice [0..load_width] for each.
+        sub_nbit_qq_fast(b, &tmp[..load_width], &v_w[..load_width]);
         let transform_width = if iter_idx + 1 < n { iter_idx + 1 } else { n };
         for i in 0..transform_width {
             b.cx(r[i], u[i]);

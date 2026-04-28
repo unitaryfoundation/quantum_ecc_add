@@ -9,9 +9,12 @@
 ## 2026-04-28 structural status update (do not lose)
 - **One-Kaliski is the Toffoli key**: one `with_kal_inv_raw` invocation costs ~1.60M, so deleting one invocation would put the current primitive stack at roughly **2.5M**, enough to match Google's Toffoli target.
 - **But one-Kaliski in-place cleanup remains blocked**: B2 leaks `lam_copy = -λ`; Strategy C (`w=dx³`) is classically correct but needs fresh output/state cleanup equivalent to reconstructing `(Px,Py)` from `(Rx,Ry)`, i.e. another point-subtraction/inversion. This is not just implementation pain.
-- **Strategy C re-estimate at current 407/404 iters is not a win**: extra q×q/q×const muls and Bennett cleanup cost ~2.5M around the single Kaliski; total estimated **~4.2M**, roughly current baseline. It was only attractive against old 511-iter baselines.
+- **600-scratch reframing**: the needed primitive is not `x^-1` into ancilla; it is clean in-place **DIV**: `(x,y)->(x,y/x)`. If DIV fits in ~600 scratch and ~1 Kaliski invocation, point-add is ~2.4-2.8M.
+- **New coefficient-transform probe** (`kaliski_linear_transform.rs`, 3 tests pass): canonical Kaliski coefficient update has `T(dx)=[[a,k],[dx,0]]` with `k*dx=-2^407`; seeding `s=dy` gives `(r,s)=(k*dy,0)` (scaled slope, y consumed). This is the first low-qubit-looking route.
+- **Coefficient-transform obstruction is crisp**: before backward to output `Ry`, need `(k*Ry,0)` but have `(k*dy,0)`, so missing update is `k*(Ry-dy)` without raw `k`. Affine shifted-Y conventions do **not** solve it; they leave a `/dx` term.
+- **Strategy C re-estimate at current 407/403 iters is not a win**: extra q×q/q×const muls and Bennett cleanup cost ~2.5M around the single Kaliski; total estimated **~4.2M**, roughly current baseline. It was only attractive against old 511-iter baselines.
 - **m_hist formula correction**: iter-START fingerprint gives `m_i`, but iter-END+available flags does not; direct persistent `m_hist` removal is blocked without a new self-cleaning Kaliski body or pebble recomputation.
-- **Remaining SOTA route**: either (a) novel Kaliski/cswap/windowed inversion reducing per-invocation cost by ~45%, or (b) a genuinely new one-inversion cleanup representation. Local arithmetic swaps are now <10% levers.
+- **Remaining SOTA route**: either (a) derive clean DIV / coefficient-transform cleanup, or (b) novel jumped/windowed Kaliski reducing per-invocation cost by ~45%. Local arithmetic swaps are now <10% levers.
 
 ## 2026-04-27 UNLOCK (partial): classical formula for m_i
 

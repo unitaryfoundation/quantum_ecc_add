@@ -229,6 +229,31 @@ raw inverse into an ancilla and then has to Bennett-clean the inverse state.
 The coefficient-transform probe above is a first attempt to derive `DIV` from
 Kaliski by seeding the coefficient register with `y`.
 
+### Why a quotient-copy DIV does not fit 600 scratch
+
+A tempting DIV implementation is:
+
+1. Run Kaliski forward with `tx` as the denominator state and `ty` as the
+   coefficient seed; this can fit with scratch `u,r` if history is eliminated.
+2. Extract/copy the quotient to a separate n-bit register.
+3. Run Kaliski backward to restore/clean the Euclidean state.
+4. Clear old `ty` and swap in the quotient.
+
+But during backward this needs simultaneously:
+
+```text
+tx as v-state, ty as s-state, scratch u, scratch r, quotient_copy
+```
+
+That is **three n-bit scratch registers** (`u,r,quotient_copy = 768q`) beyond
+`tx,ty`, before flags/history/transients. It already violates the ~600-scratch
+budget. Therefore a low-qubit DIV cannot copy the quotient across backward.
+The backward transform itself must write the desired output into `ty`.
+
+This is why the coefficient-transform target `(k*Ry,0)` matters: it is not an
+optional elegance issue; it is the only way to avoid the third n-bit scratch
+register.
+
 ## 8. Shifted-Y algebra: first fast invalidation
 
 Try to save the coefficient-transform path by changing the y-coordinate

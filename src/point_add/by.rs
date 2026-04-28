@@ -3607,6 +3607,17 @@ mod tests {
         super::super::cadd_nbit_const_fast(b, v, U256::from(1u64), ctrl);
     }
 
+    fn emit_twos_complement_cneg_exact_for_test(
+        b: &mut super::super::B,
+        v: &[super::super::QubitId],
+        ctrl: super::super::QubitId,
+    ) {
+        for &q in v {
+            b.cx(ctrl, q);
+        }
+        super::super::cadd_nbit_const(b, v, U256::from(1u64), ctrl);
+    }
+
     fn emit_logical_shift_right_even_for_test(b: &mut super::super::B, v: &[super::super::QubitId]) {
         // Reversible rotation that equals logical `/2` on the promised even
         // subspace because the old low bit is zero and rotates into the top.
@@ -3740,8 +3751,12 @@ mod tests {
             b.ccx(pattern[i], positive, a_bits[i]);
             emit_delta_positive_into_for_test(b, delta, positive);
             b.free(positive);
-            emit_twos_complement_cneg_for_test(b, delta, a_bits[i]);
-            super::super::add_nbit_const_fast(b, delta, U256::from(1u64));
+            emit_twos_complement_cneg_exact_for_test(b, delta, a_bits[i]);
+            // Use exact Cuccaro add here. The decoder is run forward, then its
+            // inverse after the modular replay has used A bits; measurement-
+            // based fast add/sub can leave phase tied to those intervening
+            // controls even when the basis data is restored.
+            super::super::add_nbit_const(b, delta, U256::from(1u64));
         }
     }
 
@@ -3753,8 +3768,8 @@ mod tests {
     ) {
         assert_eq!(pattern.len(), a_bits.len());
         for i in (0..pattern.len()).rev() {
-            super::super::sub_nbit_const_fast(b, delta, U256::from(1u64));
-            emit_twos_complement_cneg_for_test(b, delta, a_bits[i]);
+            super::super::sub_nbit_const(b, delta, U256::from(1u64));
+            emit_twos_complement_cneg_exact_for_test(b, delta, a_bits[i]);
             let positive = b.alloc_qubit();
             emit_delta_positive_into_for_test(b, delta, positive);
             b.ccx(pattern[i], positive, a_bits[i]);
@@ -3772,7 +3787,7 @@ mod tests {
     #[test]
     fn reversible_pattern_delta_decoder_matches_and_cleans() {
         const W: usize = 16;
-        const DBITS: usize = 12;
+        const DBITS: usize = 10;
         let mut b = super::super::B::new();
         let pattern = b.alloc_qubits(W);
         let delta = b.alloc_qubits(DBITS);
@@ -4161,6 +4176,110 @@ mod tests {
             "BY inverse scaled 560-step product-clean scaffold: ccx={ccx}, peak={peak}q"
         );
         assert!(ccx < 1_400_000, "inverse scaled BY cleanup too costly");
+    }
+
+    #[test]
+    fn scaled_by_pattern_decoder_560_tagged_div_scaffold_is_clean() {
+        // Clean version of the raw-pattern scaffold: expand 560 odd-pattern
+        // bits into A controls using the reversible pattern+delta decoder,
+        // run the scaled-BY replay, then reverse the decoders to clean A and
+        // restore delta. This is deliberately not the final low-scratch
+        // schedule (it keeps all A controls during replay), but it proves the
+        // decoder integrates with the 560-step arithmetic and quantifies the
+        // exact overhead.
+        let p = SECP256K1_P;
+        let inv2 = (p.wrapping_add(U256::from(1u64))) >> 1usize;
+        let mut sx = Sampler::new(b"by-pattern-decoder-560-x-v1", p);
+        let mut sy = Sampler::new(b"by-pattern-decoder-560-y-v1", p);
+        let (x, y, controls, exp_r, exp_s, f_final) = loop {
+            let x = sx.next();
+            let y = sy.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(p);
+            let mut g = SInt::from_u(x);
+            let mut r_exp = U256::ZERO;
+            let mut s_exp = addm(y, x, p);
+            let mut controls = Vec::with_capacity(560);
+            for _ in 0..560 {
+                let odd = g.bit0();
+                let a = delta > 0 && odd;
+                controls.push((odd, a));
+                if a {
+                    let nr = s_exp;
+                    let ns = mulm(subm(s_exp, r_exp, p), inv2, p);
+                    r_exp = nr;
+                    s_exp = ns;
+                } else if odd {
+                    s_exp = mulm(addm(s_exp, r_exp, p), inv2, p);
+                } else {
+                    s_exp = mulm(s_exp, inv2, p);
+                }
+                divstep_sint_state(&mut delta, &mut f, &mut g);
+            }
+            if g.is_zero() && (f.is_one_pos() || f.is_one_neg()) {
+                break (x, y, controls, r_exp, s_exp, f);
+            }
+        };
+
+        let mut b = super::super::B::new();
+        let pattern = b.alloc_qubits(560);
+        let a_hist = b.alloc_qubits(560);
+        let delta = b.alloc_qubits(10);
+        let r = b.alloc_qubits(256);
+        let s = b.alloc_qubits(256);
+        for win in 0..35 {
+            emit_pattern_delta_decode_window_for_test(
+                &mut b,
+                &pattern[win * 16..win * 16 + 16],
+                &delta,
+                &a_hist[win * 16..win * 16 + 16],
+            );
+        }
+        let decode_forward_ccx = count_ccx(&b.ops);
+        for i in 0..560 {
+            emit_scaled_by_controlled_microstep_for_test(&mut b, &r, &s, pattern[i], a_hist[i], p);
+        }
+        let replay_plus_decode_ccx = count_ccx(&b.ops);
+        for win in (0..35).rev() {
+            emit_pattern_delta_decode_window_reverse_for_test(
+                &mut b,
+                &pattern[win * 16..win * 16 + 16],
+                &delta,
+                &a_hist[win * 16..win * 16 + 16],
+            );
+        }
+        let ccx = count_ccx(&b.ops);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let mut hasher = sha3::Shake128::default();
+        hasher.update(b"by-pattern-decoder-560-sim-v1");
+        let mut xof = hasher.finalize_xof();
+        let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+        for (i, &(odd_v, _)) in controls.iter().enumerate() {
+            if odd_v {
+                *sim.qubit_mut(pattern[i]) |= 1;
+            }
+        }
+        set_slice_u512_by(&mut sim, &delta, U512::from(1u64));
+        set_slice_u512_by(&mut sim, &r, U512::ZERO);
+        set_slice_u512_by(&mut sim, &s, u256_to_u512_for_by_tests(addm(y, x, p)));
+        sim.apply(&ops);
+        assert_eq!(get_slice_u512_by(&sim, &r), u256_to_u512_for_by_tests(exp_r), "r mismatch");
+        assert_eq!(get_slice_u512_by(&sim, &s), u256_to_u512_for_by_tests(exp_s), "s mismatch");
+        assert_eq!(exp_s, U256::ZERO, "bottom tagged channel did not zero");
+        let plus_one = if f_final.is_one_pos() { exp_r } else { negm(exp_r, p) };
+        let quotient = subm(plus_one, U256::from(1u64), p);
+        assert_eq!(quotient, mulm(y, fermat_modinv(x, p), p), "tagged quotient mismatch");
+        assert_eq!(get_slice_u512_by(&sim, &a_hist), U512::ZERO, "A history not cleaned");
+        assert_eq!(get_slice_u512_by(&sim, &delta), U512::from(1u64), "delta not restored");
+        assert_eq!(sim.global_phase() & 1, 0, "phase garbage");
+        eprintln!(
+            "BY pattern-decoder 560-step tagged-DIV scaffold: decode_ccx={decode_forward_ccx}, replay_plus_decode_ccx={replay_plus_decode_ccx}, roundtrip_ccx={ccx}, peak={peak}q"
+        );
+        assert!(ccx < 1_300_000, "decoded pattern scaffold exceeded integration margin");
+        assert!(peak < 2_700, "decoded pattern scaffold too wide for current cap");
     }
 
     #[test]

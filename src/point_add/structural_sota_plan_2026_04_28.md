@@ -652,15 +652,27 @@ and its inverse. It matches sampled patterns/deltas, restores `delta_start`,
 cleans A, and is phase clean:
 
 ```text
-one 16-step window decoder: 1,808 CCX forward, 3,616 CCX roundtrip, peak 68q
-35 windows forward-only:    ≈63,280 CCX
+one 16-step window decoder: 1,776 CCX forward, 3,552 CCX roundtrip, peak 53q
+35 windows forward-only:    ≈62,160 CCX
 ```
 
 This is inside the 150k branch/decode margin used in the whole point-add budget.
-The remaining integration subtlety is scheduling: clearing A immediately with
-the inverse also restores `delta_start`, so a production replay needs either a
-small delta pebble, a reverse-from-`delta_next` A-clearer, or on-the-fly A use
-inside a self-cleaning window.
+`scaled_by_pattern_decoder_560_tagged_div_scaffold_is_clean` wires the decoder
+around the full 560-step tagged-DIV replay: expand all A controls from raw
+patterns, run the replay, then reverse the decoders to clean A and restore
+`delta=1`. It is phase-clean and exact:
+
+```text
+decode forward       =    62,160 CCX
+replay + decode      = 1,207,920 CCX
+roundtrip clean      = 1,270,080 CCX
+peak                 = 2,415q
+```
+
+This all-A-history schedule is not the final low-scratch implementation, but it
+turns the pattern-history replay into a clean reversible circuit. A production
+replay still wants an on-the-fly/window-local A schedule so it pays closer to
+forward-only decoder cost and does not keep 560 A bits live.
 
 `compressed_pattern_history_scratch_model_is_600q_if_add_workspace_is_removed`
 spells out the remaining scratch equation:

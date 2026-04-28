@@ -3222,6 +3222,54 @@ mod tests {
     }
 
     #[test]
+    fn enumerated_branch_block_select_explodes_beyond_single_step() {
+        // Another tempting idea is to group b divsteps and SELECT one fixed
+        // branch-numerator block for each possible case sequence. Even ignoring
+        // equality-control and QROM overhead, the sum of all fixed block bodies
+        // grows too quickly once b>1.
+        let mod_add = 1024usize;
+        let mod_sub = 1277usize;
+        let dbl = 255usize;
+        let halve = 255usize;
+        let case_cost = |c: char| match c {
+            'A' => mod_sub + mod_add + dbl,
+            'B' => mod_add + dbl,
+            'C' => dbl,
+            _ => unreachable!(),
+        };
+        let mut summaries = Vec::new();
+        for block in 1usize..=4 {
+            let mut seqs = std::collections::BTreeSet::<Vec<char>>::new();
+            for delta0 in -80i64..=80 {
+                for pat in 0usize..(1usize << block) {
+                    let mut delta = delta0;
+                    let mut seq = Vec::with_capacity(block);
+                    for i in 0..block {
+                        let odd = ((pat >> i) & 1) != 0;
+                        if delta > 0 && odd {
+                            seq.push('A');
+                            delta = 1 - delta;
+                        } else if odd {
+                            seq.push('B');
+                            delta = 1 + delta;
+                        } else {
+                            seq.push('C');
+                            delta = 1 + delta;
+                        }
+                    }
+                    seqs.insert(seq);
+                }
+            }
+            let body_sum: usize = seqs.iter().map(|s| s.iter().map(|&c| case_cost(c)).sum::<usize>()).sum();
+            let total = 560usize.div_ceil(block) * body_sum + 2 * 560 * halve;
+            summaries.push((block, seqs.len(), body_sum, total));
+        }
+        eprintln!("BY enumerated branch-block SELECT lower bounds: {summaries:?}");
+        assert!(summaries[1].3 > 5_000_000, "2-step enumerated SELECT unexpectedly viable");
+        assert!(summaries[2].3 > 10_000_000, "3-step enumerated SELECT unexpectedly viable");
+    }
+
+    #[test]
     fn selected_replay_budget_requires_more_than_a_signed_mux() {
         // Quantify the remaining gap after the obvious primitive improvement.
         // A signed add/sub mux can combine the A-first (s-=r) and B-first

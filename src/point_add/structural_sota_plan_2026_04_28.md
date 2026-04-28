@@ -558,6 +558,21 @@ value-proportional/block-specialized A handling near the 1.28M lower bound or a
 completely different fixed-control-block mechanism. The target is now numeric:
 close the `1.28M -> 0.80M` gap without exceeding ~600 scratch.
 
+`enumerated_branch_block_select_explodes_beyond_single_step` kills the naive
+block-SELECT version of that idea. Even ignoring equality-control and QROM
+overhead, summing all fixed case-sequence bodies gives lower bounds:
+
+```text
+b=1: 3 sequences,  ≈2.576M including scaling
+b=2: 8 sequences,  ≈5.725M
+b=3: 22 sequences, ≈15.105M
+b=4: 58 sequences, ≈38.436M
+```
+
+So block specialization cannot mean enumerating all branch case sequences and
+SELECTing one. It must exploit algebraic sharing between cases or a new
+controlled-add primitive.
+
 This reopens BY as a live SOTA-shaped route but with precise remaining
 obstacles: branch/matrix history compression, selected Hermite-factor
 application, and integration into a 35-window BY tagged-DIV scaffold. The

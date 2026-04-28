@@ -3833,6 +3833,37 @@ mod tests {
     }
 
     #[test]
+    fn tapered_2adic_branch_generator_cost_is_still_too_high() {
+        // The correct high-precision ratio/denominator state can be tapered:
+        // after each branch bit one 2-adic bit is consumed, so the active
+        // f/g width drops from 560 to 1. This is the principled version of the
+        // direct branch generator and roughly halves the uniform-W cost, but it
+        // is still too expensive to sit next to two 1.145M modular replays.
+        const STEPS: usize = 560;
+        const DBITS: usize = 12;
+        let mut b = super::super::B::new();
+        let f = b.alloc_qubits(STEPS);
+        let g = b.alloc_qubits(STEPS);
+        let delta = b.alloc_qubits(DBITS);
+        let odd = b.alloc_qubits(STEPS);
+        let a = b.alloc_qubits(STEPS);
+        let start = b.ops.len();
+        for i in 0..STEPS {
+            let rem = STEPS - i;
+            emit_2adic_by_branch_step_for_test(&mut b, &f[..rem], &g[..rem], &delta, odd[i], a[i]);
+        }
+        let ccx = count_ccx(&b.ops[start..]);
+        let compute_uncompute = 2 * ccx;
+        let two_denominators = 2 * compute_uncompute;
+        eprintln!(
+            "tapered 2-adic BY branch generator: compute_ccx={ccx}, compute_uncompute={compute_uncompute}, two_denominators={two_denominators}, peak={}q",
+            b.peak_qubits
+        );
+        assert!(ccx < 2_000_000, "tapering failed to reduce the direct generator");
+        assert!(two_denominators > 2_000_000, "tapered direct generator unexpectedly fits SOTA margin");
+    }
+
+    #[test]
     fn inverse_scaled_by_560_negr_frame_recovers_fast_cost() {
         let p = SECP256K1_P;
         let mut sx = Sampler::new(b"by-inverse-negr-560-x-v1", p);

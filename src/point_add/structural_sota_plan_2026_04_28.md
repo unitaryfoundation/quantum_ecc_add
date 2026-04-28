@@ -825,7 +825,21 @@ h16+pattern next-window mismatch = 66,905 / 70,000 = 95.58%
 Thus a generator with only a 16-bit h register plus pattern history is not a
 forward-complete state. A viable windowed generator needs a sliding
 higher-precision 2-adic state, rank/high-bit payload, or a consumed-denominator
-schedule.
+schedule. The principled tapered high-precision version was also measured in
+`tapered_2adic_branch_generator_cost_is_still_too_high`: keep 560 2-adic bits
+initially and drop one active bit per microstep. It halves the uniform-width
+cost but is still far outside the SOTA margin:
+
+```text
+tapered generator compute             = 1,004,080 CCX
+compute+uncompute per denominator      = 2,008,160 CCX
+two denominators                       = 4,016,320 CCX
+peak                                  = 3372q
+```
+
+So neither h16-only nor direct tapered high precision is the integration path.
+The missing object is a genuinely windowed/self-cleaning division, not a more
+careful version of per-bit branch generation.
 
 The first savings-capable implementation must either:
 

@@ -183,10 +183,25 @@ So window hints can plausibly save 100-250 history qubits versus `m_hist`, but
 only if a selected matrix can be applied cheaper than replaying microsteps. This
 is qubit-structural, not yet a Toffoli route.
 
-Next concrete work: extend `kaliski_jump.rs` from matrix observation into a
-matrix-application lower-bound/synthesis search for `t=2,3`, with comparator
-cost included. If t=2 cannot beat two ordinary iterations after paying for the
-second-step branch computation, kill this path quickly and move to BY/divstep.
+`selected_matrix_application_arithmetic_intensity_model` measures a simple
+row-popcount add/sub model for selected matrices. It ignores QROM, multiplexing,
+and reversible cleanup, so real cost is higher:
+
+| t | mean matrix row-add terms | mean raw odd-step add/sub count | max |
+|---:|---:|---:|---:|
+| 4  | 5.30 | 3.99 | 14 |
+| 8  | 13.89 | 7.97 | 44 |
+| 16 | 34.94 | 15.73 | 74 |
+
+This means selected-matrix windowing cannot win by reducing arithmetic row
+terms; it must win by deleting many cswaps/comparators/control scaffolds. That
+focuses the synthesis target sharply: a viable implementation needs a coherent
+matrix application that avoids generic controlled-cswap replay and does not pay
+QROM/control overhead proportional to all candidate matrices.
+
+Next concrete work: synthesize/lower-bound selected matrix application for
+`t=4..16` with QROM/control costs included. If it cannot exploit cswap deletion
+strongly enough, move to BY/divstep or a different DIV transform.
 
 ### Program B — triangular one-inversion schedule (highest payoff, highest risk)
 

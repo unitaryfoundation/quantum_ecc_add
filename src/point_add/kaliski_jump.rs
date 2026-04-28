@@ -607,6 +607,66 @@ mod tests {
         }
     }
 
+    fn row_popcount_adds(row: (i128, i128)) -> usize {
+        let terms = row.0.unsigned_abs().count_ones() as usize
+            + row.1.unsigned_abs().count_ones() as usize;
+        terms.saturating_sub(1)
+    }
+
+    fn matrix_popcount_adds(m: Mat2) -> usize {
+        row_popcount_adds((m.a00, m.a01)) + row_popcount_adds((m.a10, m.a11))
+    }
+
+    #[test]
+    fn selected_matrix_application_arithmetic_intensity_model() {
+        // A selected t-window matrix can delete many generic cswaps/comparators,
+        // but it is not "free": dense coefficients require shifted add/sub terms
+        // to form the output rows. This popcount model is a lower-bound-ish
+        // arithmetic intensity diagnostic (it ignores QROM/multiplexing and
+        // reversible temp cleanup, so real cost is higher). It tells us any
+        // Toffoli win must come mostly from deleting cswaps/comparators, not
+        // from fewer row-add terms.
+        use std::collections::BTreeMap;
+
+        let mut sampler = Sampler::new(b"window-matrix-popcount-cost-v1", SECP256K1_P);
+        for &t in &[4usize, 8, 16] {
+            let mut total_cost = 0usize;
+            let mut total_micro_odd_adds = 0usize;
+            let mut max_cost = 0usize;
+            let mut hist: BTreeMap<usize, usize> = BTreeMap::new();
+            let mut windows = 0usize;
+            for _ in 0..3000usize {
+                let mut u = SECP256K1_P;
+                let mut v = sampler.next();
+                for _ in (0..407).step_by(t) {
+                    if v.is_zero() { break; }
+                    let (nu, nv, obs) = observe_window(u, v, 8, t);
+                    let cost = matrix_popcount_adds(obs.uv_mat) + matrix_popcount_adds(obs.rs_mat);
+                    max_cost = max_cost.max(cost);
+                    total_cost += cost;
+                    total_micro_odd_adds += obs.cases.iter().filter(|&&c| matches!(c, KCase::UGtV | KCase::VGtU)).count() * 2;
+                    *hist.entry(cost).or_insert(0) += 1;
+                    windows += 1;
+                    u = nu;
+                    v = nv;
+                }
+            }
+            let mean_cost = total_cost as f64 / windows as f64;
+            let mean_micro = total_micro_odd_adds as f64 / windows as f64;
+            eprintln!(
+                "t={t}: mean matrix row-popcount adds={mean_cost:.2}, mean current odd-step add/sub count={mean_micro:.2}, max={max_cost}, windows={windows}"
+            );
+            // For larger windows, matrix rows are denser than the raw odd-step
+            // add/sub count. This doesn't kill windowing, but it proves the win
+            // has to come from removing cswap/comparator/control scaffolding.
+            if t >= 8 {
+                assert!(mean_cost > mean_micro);
+            }
+            assert!(max_cost > 0);
+            assert!(!hist.is_empty());
+        }
+    }
+
     #[test]
     fn hybrid_kaliski_window_survey_test() {
         for &(w, t) in &[(6usize, 4usize), (8usize, 4usize), (8usize, 6usize)] {

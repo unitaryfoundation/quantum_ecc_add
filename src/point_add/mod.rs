@@ -85,6 +85,7 @@ pub mod luo_proto;
 pub mod coset_proto;
 #[cfg(test)]
 pub mod single_inv_numeric;
+pub mod kaliski_classical_replay;
 pub mod test_timeout;
 
 struct B {

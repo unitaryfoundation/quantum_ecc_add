@@ -811,16 +811,46 @@ projected point-add with naive generator ≈ 9,028,486 CCX
 ```
 
 So the immediate integration target is not "BY replay plus naive reversible
-branch generation". That would validate correctness but not savings. The first
-savings-capable implementation must either:
+branch generation". That would validate correctness but not savings.
 
-1. window the denominator/control generator so branch patterns are produced by a
-   cheap selected matrix/low-ratio update, or
+`pattern_augmented_low_ratio_state_still_not_forward_complete` also kills the
+simplest windowed escape. The 16 branch bits of the current window are
+controlled by `(delta, h=g/f mod 2^16)`, but the next window's `h` is not. On
+2k sampled secp256k1 trajectories:
+
+```text
+h16+pattern next-window mismatch = 66,905 / 70,000 = 95.58%
+```
+
+Thus a generator with only a 16-bit h register plus pattern history is not a
+forward-complete state. A viable windowed generator needs a sliding
+higher-precision 2-adic state, rank/high-bit payload, or a consumed-denominator
+schedule.
+
+The first savings-capable implementation must either:
+
+1. window the denominator/control generator with enough high 2-adic state that
+   it avoids 560 full-width microsteps, or
 2. use a triangular point-add schedule where the denominator state is consumed
    and later cleaned from the output, avoiding a full compute-copy-uncompute
    branch generator.
 
 This is the line between a benchmark smoke scaffold and a real SOTA candidate.
+
+Approximate Kaliski cutoff is not a shortcut under the current phase-clean
+contract. Env-gated threshold probes (`KAL_PAIR1_ITERS`, `KAL_PAIR2_ITERS`) show
+that even tiny reductions fail the alternate-seed phase guard:
+
+```text
+pair1=403,pair2=403: classical=0, phase_batches=1
+pair1=407,pair2=400: classical=0, phase_batches=2
+pair1=400,pair2=403: classical=1, phase_batches=1
+pair1=390,pair2=390: classical=16, phase_batches=49
+```
+
+So current Kaliski iteration counts are effectively tight unless the phase
+contract itself is changed. The SOTA path must be a different division
+architecture, not truncating the existing one.
 
 ### Program B — triangular one-inversion schedule (highest payoff, highest risk)
 

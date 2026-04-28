@@ -237,6 +237,21 @@ in `by.rs` add two relevant facts:
    So a 550-step approximate BY inversion is within the user's 1% failure
    allowance empirically, reducing `w=16` windows from 47 to 35.
 
+`jumpdivstep_budget_model_suggests_live_prototype` turns that into an optimistic
+lower-bound budget for applying each selected matrix to three full-width pairs
+`(f,g)` plus the two coefficient columns, charging one n-bit add/sub per
+row-popcount term:
+
+```text
+w=16 exact 742-step bound: 47 windows, ≈416,782 Toffoli lower bound
+w=16 approx 550-step cap : 35 windows, ≈310,370 Toffoli lower bound
+```
+
+This ignores matrix synthesis, sign handling, reversible cleanup, and modular
+normalization, so it is not a forecast. But it is far below the current ~1.6M
+Kaliski invocation cost. BY jump inversion is therefore the most concrete live
+prototype candidate now.
+
 This is not yet a circuit, but it is a better Toffoli-structural lead than
 Kaliski low-bit windows: no full comparator sequence, moderate matrix row
 intensity, and approximate iteration count is plausible.

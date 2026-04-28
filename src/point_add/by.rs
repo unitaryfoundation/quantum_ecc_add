@@ -913,6 +913,43 @@ mod tests {
     }
 
     #[test]
+    fn jumpdivstep_budget_model_suggests_live_prototype() {
+        // Very optimistic but actionable budget model for a BY jump inversion:
+        // apply the selected 2x2 matrix to three full-width pairs:
+        //   (f,g) plus the two coefficient columns. Each row-popcount term is
+        // charged as one n-bit add/sub. This ignores reversible matrix synthesis,
+        // sign handling, reductions, and cleanup, so it is a lower bound; still,
+        // if this were already > Kaliski there would be no reason to prototype.
+        const N: usize = 256;
+        const PAIRS_PER_WINDOW: usize = 3;
+        let samples = 50_000usize;
+        let mut hasher = sha3::Shake128::default();
+        hasher.update(b"by-jump-budget-v1");
+        let mut reader = hasher.finalize_xof();
+        let mut buf = [0u8; 24];
+        let w = 16usize;
+        let mut total_terms = 0usize;
+        for _ in 0..samples {
+            reader.read(&mut buf);
+            let f_low = (u64::from_le_bytes(buf[0..8].try_into().unwrap()) as i128) | 1;
+            let g_low = u64::from_le_bytes(buf[8..16].try_into().unwrap()) as i128;
+            let delta = (u64::from_le_bytes(buf[16..24].try_into().unwrap()) % 41) as i64 - 20;
+            let (_, _, _, m) = jump_matrix_direct_lowword(w, w, delta, f_low, g_low);
+            total_terms += matrix_popcount_adds_i128(m);
+        }
+        let mean_terms_per_window = total_terms as f64 / samples as f64;
+        let exact_windows = safegcd_iters(256).div_ceil(w);
+        let approx_windows_1pct = 550usize.div_ceil(w);
+        let exact_toffoli_lb = mean_terms_per_window * exact_windows as f64 * PAIRS_PER_WINDOW as f64 * N as f64;
+        let approx_toffoli_lb = mean_terms_per_window * approx_windows_1pct as f64 * PAIRS_PER_WINDOW as f64 * N as f64;
+        eprintln!(
+            "BY w=16 budget lower-bound: mean_terms/window={mean_terms_per_window:.2}, exact_windows={exact_windows}, exact≈{exact_toffoli_lb:.0} Toffoli, approx_windows={approx_windows_1pct}, approx≈{approx_toffoli_lb:.0} Toffoli"
+        );
+        assert!(exact_toffoli_lb < 600_000.0, "BY lower bound no longer beats Kaliski enough to prototype");
+        assert!(approx_toffoli_lb < 500_000.0, "Approx BY lower bound too high");
+    }
+
+    #[test]
     fn jumpdivstep_matrix_entry_survey_test() {
         let samples = 100_000;
         for &w in &[4usize, 8, 12, 16] {

@@ -3792,6 +3792,26 @@ mod tests {
         super::super::mod_halve_inplace(b, s, p);
     }
 
+    fn emit_scaled_by_controlled_microstep_exact_cneg_for_test(
+        b: &mut super::super::B,
+        r: &[super::super::QubitId],
+        s: &[super::super::QubitId],
+        odd_ctrl: super::super::QubitId,
+        a_ctrl: super::super::QubitId,
+        p: U256,
+    ) {
+        for i in 0..r.len() {
+            super::super::cswap(b, a_ctrl, r[i], s[i]);
+        }
+        // The A-controlled negation is the only MBU operation directly
+        // controlled by A in the fast microstep. Making just this exact may be
+        // enough to allow window-local A clearing while preserving most of the
+        // fast cmod_add+halve savings.
+        emit_cmod_neg_exact_for_test(b, s, a_ctrl, p);
+        super::super::cmod_add_qq(b, s, r, odd_ctrl, p);
+        super::super::mod_halve_inplace_fast(b, s, p);
+    }
+
     fn emit_scaled_by_controlled_microstep_for_test(
         b: &mut super::super::B,
         r: &[super::super::QubitId],
@@ -4366,6 +4386,185 @@ mod tests {
             "BY inverse scaled 560-step product-clean scaffold: ccx={ccx}, peak={peak}q"
         );
         assert!(ccx < 1_400_000, "inverse scaled BY cleanup too costly");
+    }
+
+    fn controls_for_560_sample_for_test(x: U256, p: U256) -> Option<(Vec<(bool, bool)>, SInt)> {
+        let mut delta = 1i64;
+        let mut f = SInt::from_u(p);
+        let mut g = SInt::from_u(x);
+        let mut controls = Vec::with_capacity(560);
+        for _ in 0..560 {
+            let odd = g.bit0();
+            let a = delta > 0 && odd;
+            controls.push((odd, a));
+            divstep_sint_state(&mut delta, &mut f, &mut g);
+        }
+        if g.is_zero() && (f.is_one_pos() || f.is_one_neg()) {
+            Some((controls, f))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn quantum_branch_values_do_not_reduce_replay_toffoli_accounting() {
+        // Important accounting check: the benchmark averages over classical
+        // shot masks, not over quantum control values. A CCX controlled by a
+        // branch qubit is still a Toffoli gate issued to the quantum computer
+        // on every live shot. Therefore branch sparsity does not lower replay
+        // Toffoli. This kills a tempting "executed controls are sparse" margin.
+        let p = SECP256K1_P;
+        let mut b = super::super::B::new();
+        let odd = b.alloc_qubits(560);
+        let a = b.alloc_qubits(560);
+        let r = b.alloc_qubits(256);
+        let s = b.alloc_qubits(256);
+        for i in 0..560 {
+            emit_scaled_by_controlled_microstep_for_test(&mut b, &r, &s, odd[i], a[i], p);
+        }
+        let static_ccx = count_ccx(&b.ops);
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let mut sampler = Sampler::new(b"by-executed-fast-replay-v1", p);
+        let mut samples = 0usize;
+        let mut sum_exec = 0u64;
+        let mut max_exec = 0u64;
+        while samples < 32 {
+            let x = sampler.next();
+            let Some((controls, _)) = controls_for_560_sample_for_test(x, p) else { continue; };
+            let mut hasher = sha3::Shake128::default();
+            hasher.update(b"by-executed-fast-replay-sim-v1");
+            let mut xof = hasher.finalize_xof();
+            let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+            for (i, &(odd_v, a_v)) in controls.iter().enumerate() {
+                if odd_v { *sim.qubit_mut(odd[i]) |= 1; }
+                if a_v { *sim.qubit_mut(a[i]) |= 1; }
+            }
+            set_slice_u512_by(&mut sim, &s, u256_to_u512_for_by_tests(x));
+            sim.apply(&ops);
+            sum_exec += sim.stats.toffoli_gates;
+            max_exec = max_exec.max(sim.stats.toffoli_gates);
+            samples += 1;
+        }
+        let mean_exec = sum_exec as f64 / samples as f64;
+        let mean_per_shot = mean_exec / 64.0;
+        let max_per_shot = (max_exec as f64) / 64.0;
+        eprintln!(
+            "BY fast replay Toffoli accounting: static={static_ccx}, mean_per_shot={mean_per_shot:.1}, max_per_shot={max_per_shot:.1}, samples={samples}"
+        );
+        assert!((mean_per_shot - static_ccx as f64).abs() < 1.0, "quantum branch controls unexpectedly reduce Toffoli accounting");
+    }
+
+    #[test]
+    fn exact_cneg_scaled_microstep_may_enable_window_local_a_clearing() {
+        let p = SECP256K1_P;
+        let inv2 = (p.wrapping_add(U256::from(1u64))) >> 1usize;
+        let mut sx = Sampler::new(b"by-window-local-exact-cneg-x-v1", p);
+        let mut sy = Sampler::new(b"by-window-local-exact-cneg-y-v1", p);
+        let (x, y, controls, boundary_delta, exp_r, exp_s, f_final) = loop {
+            let x = sx.next();
+            let y = sy.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(p);
+            let mut g = SInt::from_u(x);
+            let mut r_exp = U256::ZERO;
+            let mut s_exp = addm(y, x, p);
+            let mut controls = Vec::with_capacity(560);
+            let mut boundary_delta = Vec::with_capacity(35);
+            for step in 0..560 {
+                if step % 16 == 0 {
+                    boundary_delta.push(delta);
+                }
+                let odd = g.bit0();
+                let a = delta > 0 && odd;
+                controls.push((odd, a));
+                if a {
+                    let nr = s_exp;
+                    let ns = mulm(subm(s_exp, r_exp, p), inv2, p);
+                    r_exp = nr;
+                    s_exp = ns;
+                } else if odd {
+                    s_exp = mulm(addm(s_exp, r_exp, p), inv2, p);
+                } else {
+                    s_exp = mulm(s_exp, inv2, p);
+                }
+                divstep_sint_state(&mut delta, &mut f, &mut g);
+            }
+            if g.is_zero() && (f.is_one_pos() || f.is_one_neg()) {
+                break (x, y, controls, boundary_delta, r_exp, s_exp, f);
+            }
+        };
+        let mut b = super::super::B::new();
+        let pattern = b.alloc_qubits(560);
+        let delta_starts: Vec<Vec<super::super::QubitId>> = (0..35).map(|_| b.alloc_qubits(10)).collect();
+        let delta_work = b.alloc_qubits(10);
+        let a_window = b.alloc_qubits(16);
+        let r = b.alloc_qubits(256);
+        let s = b.alloc_qubits(256);
+        for win in 0..35 {
+            for i in 0..10 {
+                b.cx(delta_starts[win][i], delta_work[i]);
+            }
+            emit_pattern_delta_decode_window_for_test(
+                &mut b,
+                &pattern[win * 16..win * 16 + 16],
+                &delta_work,
+                &a_window,
+            );
+            for i in 0..16 {
+                emit_scaled_by_controlled_microstep_exact_cneg_for_test(
+                    &mut b,
+                    &r,
+                    &s,
+                    pattern[win * 16 + i],
+                    a_window[i],
+                    p,
+                );
+            }
+            emit_pattern_delta_decode_window_reverse_for_test(
+                &mut b,
+                &pattern[win * 16..win * 16 + 16],
+                &delta_work,
+                &a_window,
+            );
+            for i in 0..10 {
+                b.cx(delta_starts[win][i], delta_work[i]);
+            }
+        }
+        let ccx = count_ccx(&b.ops);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let mut hasher = sha3::Shake128::default();
+        hasher.update(b"by-window-local-exact-cneg-sim-v1");
+        let mut xof = hasher.finalize_xof();
+        let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+        for (i, &(odd_v, _)) in controls.iter().enumerate() {
+            if odd_v {
+                *sim.qubit_mut(pattern[i]) |= 1;
+            }
+        }
+        for (win, &d) in boundary_delta.iter().enumerate() {
+            set_slice_u512_by(&mut sim, &delta_starts[win], twos_u512_for_delta(d, 10));
+        }
+        set_slice_u512_by(&mut sim, &r, U512::ZERO);
+        set_slice_u512_by(&mut sim, &s, u256_to_u512_for_by_tests(addm(y, x, p)));
+        sim.apply(&ops);
+        assert_eq!(get_slice_u512_by(&sim, &r), u256_to_u512_for_by_tests(exp_r), "r mismatch");
+        assert_eq!(get_slice_u512_by(&sim, &s), u256_to_u512_for_by_tests(exp_s), "s mismatch");
+        let plus_one = if f_final.is_one_pos() { exp_r } else { negm(exp_r, p) };
+        let quotient = subm(plus_one, U256::from(1u64), p);
+        assert_eq!(quotient, mulm(y, fermat_modinv(x, p), p), "tagged quotient mismatch");
+        assert_eq!(get_slice_u512_by(&sim, &a_window), U512::ZERO, "A window scratch not clean");
+        assert_eq!(get_slice_u512_by(&sim, &delta_work), U512::ZERO, "delta work not clean");
+        let phase = sim.global_phase() & 1;
+        eprintln!(
+            "BY window-local exact-cneg replay: ccx={ccx}, peak={peak}q, phase={phase}"
+        );
+        assert_eq!(phase, 0, "exact A-controlled negation did not fix early A-clear phase");
+        assert!(ccx < 1_550_000, "exact-cneg window-local replay too expensive to keep alive");
     }
 
     #[test]

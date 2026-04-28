@@ -710,7 +710,10 @@ So merely plumbing denominator generation into the current clean decoded replay
 is not enough; it is already slightly over 2.7M before branch generation. The
 moonshot target is now sharper: get the selected replay closer to the fixed-
 control ~0.8M/replay band, or solve early A clearing without paying exact-
-arithmetic costs.
+arithmetic costs. `quantum_branch_values_do_not_reduce_replay_toffoli_accounting`
+confirms there is no hidden average-case relief from sparse branch values: the
+benchmark counts a quantum-controlled CCX as issued on every live shot, so the
+fast replay's average Toffoli per shot equals the static `1,145,760` count.
 
 `compressed_pattern_history_scratch_model_is_600q_if_add_workspace_is_removed`
 spells out the remaining scratch equation:

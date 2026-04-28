@@ -6653,11 +6653,20 @@ fn build_standard_point_add(
         || branch_term_div
         || branch_term_roll_div
         || std::env::var("KAL_TAGGED_DIV_VALIDATE").ok().as_deref() == Some("1");
-    let pair1_iters = 407;
+    let pair1_iters = std::env::var("KAL_PAIR1_ITERS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(407);
     // The tagged validation paths change the op stream / Fiat-Shamir seed;
     // keep pair2 at the prior robust 404 setting to avoid conflating the
-    // algebra probe with an iteration-threshold phase cliff.
-    let pair2_iters = if tagged_div_validate || pair2_branch_inv { 404 } else { 403 };
+    // algebra probe with an iteration-threshold phase cliff.  Env overrides are
+    // for approximate-correctness threshold research only; default remains the
+    // exact checked setting.
+    let pair2_default = if tagged_div_validate || pair2_branch_inv { 404 } else { 403 };
+    let pair2_iters = std::env::var("KAL_PAIR2_ITERS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(pair2_default);
     if tagged_div_validate {
         // Structural validation path for the 600-scratch DIV idea: seed the
         // numerator as dy+dx, so the Kaliski coefficient output is tagged by

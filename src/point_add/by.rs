@@ -1462,7 +1462,7 @@ mod tests {
         }
     }
 
-    fn ratio_window_next(w: usize, delta: i64, h: u64) -> (i64, u64) {
+    fn ratio_window_next_with_pattern(w: usize, delta: i64, h: u64) -> (i64, u64, u64) {
         let signed_h = if (h & (1u64 << (w - 1))) != 0 {
             (h as i128) - (1i128 << w)
         } else {
@@ -1472,7 +1472,11 @@ mod tests {
         let mut f = SInt::from_u(U256::from(1));
         let mag = U256::from(signed_h.unsigned_abs());
         let mut g = SInt { neg: signed_h < 0, mag };
-        for _ in 0..w {
+        let mut pattern = 0u64;
+        for i in 0..w {
+            if g.bit0() {
+                pattern |= 1u64 << i;
+            }
             divstep_sint_state(&mut d, &mut f, &mut g);
         }
         let mask = (1u64 << w) - 1;
@@ -1487,7 +1491,12 @@ mod tests {
             g.mag.as_limbs()[0] & mask
         };
         let inv_f = inv_odd_mod_pow2_u64(f_low, w);
-        (d, g_low.wrapping_mul(inv_f) & mask)
+        (d, g_low.wrapping_mul(inv_f) & mask, pattern)
+    }
+
+    fn ratio_window_next(w: usize, delta: i64, h: u64) -> (i64, u64) {
+        let (d, h_next, _) = ratio_window_next_with_pattern(w, delta, h);
+        (d, h_next)
     }
 
     fn low_ratio_of_sints(f: SInt, g: SInt, w: usize) -> u64 {
@@ -1503,6 +1512,53 @@ mod tests {
             g.mag.as_limbs()[0] & mask
         };
         g_low.wrapping_mul(inv_odd_mod_pow2_u64(f_low, w)) & mask
+    }
+
+    #[test]
+    fn pattern_augmented_low_ratio_state_still_not_forward_complete() {
+        // Sharper invalidation of the tempting h-only generator.  The current
+        // 16 branch bits are determined by (delta, h=g/f mod 2^16), but the
+        // *next* window's h is not.  The missing information is high 2-adic
+        // data of the denominator pair, not merely the branch pattern.  So a
+        // savings-capable generator cannot keep only a 16-bit h register plus
+        // the pattern history; it needs a sliding higher-precision state, a
+        // rank payload, or a consumed-denominator schedule.
+        const W: usize = 16;
+        let samples = 2_000usize;
+        let mut sampler = Sampler::new(b"by-pattern-augmented-forward-dead-v1", SECP256K1_P);
+        let mut windows = 0usize;
+        let mut h_next_mismatches = 0usize;
+        let mut first: Option<(i64, u64, u64, u64)> = None;
+        for _ in 0..samples {
+            let x = sampler.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(SECP256K1_P);
+            let mut g = SInt::from_u(x);
+            for _ in 0..35 {
+                let h = low_ratio_of_sints(f, g, W);
+                let (_d_model, h_model, pat) = ratio_window_next_with_pattern(W, delta, h);
+                let mut delta_actual = delta;
+                let mut f_actual = f;
+                let mut g_actual = g;
+                for _ in 0..W {
+                    divstep_sint_state(&mut delta_actual, &mut f_actual, &mut g_actual);
+                }
+                let h_actual = low_ratio_of_sints(f_actual, g_actual, W);
+                if h_actual != h_model {
+                    h_next_mismatches += 1;
+                    first.get_or_insert((delta, h, pat, h_actual ^ h_model));
+                }
+                windows += 1;
+                delta = delta_actual;
+                f = f_actual;
+                g = g_actual;
+            }
+        }
+        let mismatch_rate = h_next_mismatches as f64 / windows as f64;
+        eprintln!(
+            "BY h16+pattern forward incompleteness: mismatches={h_next_mismatches}/{windows} ({mismatch_rate:.4}), first={first:?}"
+        );
+        assert!(mismatch_rate > 0.50, "h16+pattern unexpectedly predicts next-window h often enough");
     }
 
     #[test]

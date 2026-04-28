@@ -626,6 +626,12 @@ compression. It is not yet the user's 600-scratch design, but it is now an
 actual costed 560-step circuit skeleton, not only an extrapolated one-step
 number.
 
+The raw `(odd,A)` controls can be compressed further because A is not an
+independent bit. `window_pattern_and_delta_reconstruct_a_controls` proves that a
+16-bit odd-pattern plus the starting delta reconstructs all 16 A-controls and
+the next delta. Thus the history payload can be branch patterns only; A-controls
+are decoder scratch.
+
 This is the first coherent selected BY replay model in the right Toffoli band.
 It is not yet a complete DIV: branch-history compression/cleanup and the
 controlled-neg zero representative need production handling. But algebraically

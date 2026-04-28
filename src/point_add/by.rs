@@ -3342,6 +3342,51 @@ mod tests {
         super::super::mod_halve_inplace_fast(b, s, p);
     }
 
+    fn a_mask_from_pattern_and_delta_for_test(pattern: u16, w: usize, mut delta: i64) -> (u16, i64) {
+        let mut a_mask = 0u16;
+        for i in 0..w {
+            let odd = ((pattern >> i) & 1) != 0;
+            let a = delta > 0 && odd;
+            if a {
+                a_mask |= 1u16 << i;
+                delta = 1 - delta;
+            } else {
+                delta = 1 + delta;
+            }
+        }
+        (a_mask, delta)
+    }
+
+    #[test]
+    fn window_pattern_and_delta_reconstruct_a_controls() {
+        const W: usize = 16;
+        let mut hasher = sha3::Shake128::default();
+        hasher.update(b"by-pattern-a-mask-v1");
+        let mut reader = hasher.finalize_xof();
+        let mut buf = [0u8; 24];
+        for _ in 0..20_000 {
+            reader.read(&mut buf);
+            let f_low = (u64::from_le_bytes(buf[0..8].try_into().unwrap()) as i128) | 1;
+            let g_low = u64::from_le_bytes(buf[8..16].try_into().unwrap()) as i128;
+            let delta = (u64::from_le_bytes(buf[16..24].try_into().unwrap()) % 41) as i64 - 20;
+            let controls = branch_controls_for_lowword_window_for_test(W, delta, f_low, g_low);
+            let mut pattern = 0u16;
+            let mut expected_a = 0u16;
+            for (i, &(odd, a)) in controls.iter().enumerate() {
+                if odd {
+                    pattern |= 1u16 << i;
+                }
+                if a {
+                    expected_a |= 1u16 << i;
+                }
+            }
+            let (got_a, got_delta) = a_mask_from_pattern_and_delta_for_test(pattern, W, delta);
+            let direct_delta = jump_matrix_direct_lowword(W, W, delta, f_low, g_low).3.delta_final;
+            assert_eq!(got_a, expected_a, "A-mask reconstruction failed");
+            assert_eq!(got_delta, direct_delta, "final delta reconstruction failed");
+        }
+    }
+
     fn branch_controls_for_lowword_window_for_test(
         w: usize,
         mut delta: i64,

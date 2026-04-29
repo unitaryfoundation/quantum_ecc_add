@@ -217,6 +217,23 @@ constant-`r0` version of this rescue.  Preserving `x` and getting a clean
 quotient needs either a second coefficient channel or a data-dependent way to
 cancel `a(x)`.
 
+The data-dependent `a(x)` cancellation is not small either.  In
+`a_coefficient_cancellation_is_dense_on_toy_kaliski`, mask bits of the Kaliski
+`a(x)` coefficient have full degree and near-half-density ANFs:
+
+```text
+n=4  degree=4/4    density=12/16
+n=6  degree=6/6    density=34/64
+n=8  degree=8/8    density=132/256
+n=10 degree=10/10  density=590/1024
+n=12 degree=12/12  density=2094/4096
+```
+
+So subtracting `a(x)` is effectively another branch/inverse computation, not a
+tiny kickmix correction.  This leaves the second coefficient channel or a
+different triangular Euclidean transform as the only coefficient-transform
+routes worth considering.
+
 ## 7. The real primitive we need: in-place modular division
 
 The low-qubit point-add can be phrased around one primitive:

@@ -1613,8 +1613,11 @@ cannot both preserve `x` and expose `y/x` by just using a constant tag.  If
 `r0=ρ` and `s0=y+β`, the outputs are `s=ρx` and
 `r=k*y+(ρa+βk)`.  `single_coefficient_pair_cannot_preserve_x_and_expose_quotient_by_constant_tag`
 shows sampled `(a,k,1)` are affine-non-collinear, so no constants `ρ,β,C` make
-`ρa+βk=C`.  A one-pair DIV still needs a data-dependent `a(x)` cancellation or
-a second channel.
+`ρa+βk=C`.  The data-dependent cancellation escape is also ugly:
+`a_coefficient_cancellation_is_dense_on_toy_kaliski` gets full-degree,
+near-half-density ANFs for mask bits of `a(x)` (`n=8: 132/256`,
+`n=12: 2094/4096`).  A one-pair DIV still needs either a second channel or a
+different triangular Euclidean transform.
 
 Coordinate-model escape check: `efficient_curve_model_transforms_need_missing_torsion`
 records that secp256k1's prime-order group has `order mod 2 = 1` and

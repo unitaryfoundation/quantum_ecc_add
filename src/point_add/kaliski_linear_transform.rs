@@ -225,6 +225,105 @@ fn single_coefficient_pair_cannot_preserve_x_and_expose_quotient_by_constant_tag
     assert!(!det.is_zero(), "sampled (a,k) were affine-collinear; constant-tag DIV rescue may exist");
 }
 
+fn toy_branch_sequence_for_a_coeff(x: u64, p: u64, iters: usize) -> Vec<Branch> {
+    let mut u = p;
+    let mut v = x;
+    let mut f = 1u8;
+    let mut out = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        let mut m = 0u8;
+        if f == 1 && v == 0 { m ^= 1; }
+        f ^= m;
+        let u0 = (u & 1) as u8;
+        let v0 = (v & 1) as u8;
+        let mut a = 0u8;
+        if f == 1 && u0 == 0 { a ^= 1; }
+        if f == 1 && u0 == 1 && v0 == 0 { m ^= 1; }
+        let b = a ^ m;
+        let gt = if u > v { 1u8 } else { 0u8 };
+        let delta = (f & gt) & (1 ^ b);
+        a ^= delta;
+        m ^= delta;
+        let br = Branch { a_swap: a == 1, add: (f & (1 ^ b)) == 1 };
+        out.push(br);
+        if br.a_swap { core::mem::swap(&mut u, &mut v); }
+        if br.add {
+            assert!(v >= u, "Kaliski branch should subtract smaller from larger");
+            v -= u;
+        }
+        v >>= 1;
+        if br.a_swap { core::mem::swap(&mut u, &mut v); }
+    }
+    out
+}
+
+fn toy_apply_coeffs_for_a_coeff(seq: &[Branch], mut r: u64, mut s: u64, p: u64) -> (u64, u64) {
+    for br in seq {
+        if br.a_swap { core::mem::swap(&mut r, &mut s); }
+        if br.add { s = (s + r) % p; }
+        r = (2 * r) % p;
+        if br.a_swap { core::mem::swap(&mut r, &mut s); }
+    }
+    (r, s)
+}
+
+fn toy_a_coefficient_phase_anf_stats(n: usize, p: u64, mask: u64) -> (usize, usize) {
+    let size = 1usize << n;
+    let mut anf = vec![0u8; size];
+    for x in 0..size {
+        let a = if x > 0 && (x as u64) < p {
+            let seq = toy_branch_sequence_for_a_coeff(x as u64, p, 2 * n - 1);
+            let (a, lower) = toy_apply_coeffs_for_a_coeff(&seq, 1, 0, p);
+            assert_eq!(lower, x as u64);
+            a
+        } else {
+            0
+        };
+        anf[x] = ((a & mask).count_ones() & 1) as u8;
+    }
+    for bit in 0..n {
+        for idx in 0..size {
+            if (idx & (1usize << bit)) != 0 {
+                anf[idx] ^= anf[idx ^ (1usize << bit)];
+            }
+        }
+    }
+    let density = anf.iter().filter(|&&c| c != 0).count();
+    let degree = anf
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &c)| if c != 0 { Some(i.count_ones() as usize) } else { None })
+        .max()
+        .unwrap_or(0);
+    (degree, density)
+}
+
+#[test]
+fn a_coefficient_cancellation_is_dense_on_toy_kaliski() {
+    // The constant-tag test above leaves one theoretical escape: preserve x in
+    // the lower coefficient output and subtract the contaminant a(x) with a
+    // data-dependent circuit.  On toy Kaliski transforms, mask bits of a(x) are
+    // already full-degree and near-half-density ANFs.  So cancelling a(x) is not
+    // a tiny phase/kickmix correction; it is effectively another Kaliski-like
+    // branch computation.
+    let cases = [
+        (4usize, 13u64, 0b1010u64),
+        (6usize, 61u64, 0b10_1010u64),
+        (8usize, 251u64, 0b1010_0101u64),
+        (10usize, 1021u64, 0b10_1001_0101u64),
+        (12usize, 4093u64, 0b1010_0101_0101u64),
+    ];
+    for &(n, p, mask) in &cases {
+        let (degree, density) = toy_a_coefficient_phase_anf_stats(n, p, mask);
+        let table = 1usize << n;
+        eprintln!(
+            "toy Kaliski a(x) phase: n={n}, p={p}, degree={degree}, density={density}/{table}"
+        );
+        assert!(degree >= n - 1);
+        assert!(density > table / 3);
+    }
+}
+
 #[test]
 fn dx_tagged_seed_recovers_division_with_negligible_exception() {
     // Approximate tolerance reopens the self-cleaning DIV route. Seed the

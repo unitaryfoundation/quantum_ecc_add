@@ -679,3 +679,57 @@ ANF with degree **15 of 16 variables** and density **32518 / 65536** monomials.
 This does not prove every possible phase-oracle implementation is expensive,
 but it rules out the hoped-for sparse/low-degree correction.  The phase-only
 cleanup is just the quotient problem in disguise.
+
+## 12. Attempt F: absorb Kaliski's scale by pre-scaling the denominator
+
+Kaliski exposes a raw coefficient of the form
+
+```text
+inv_raw = -v^-1 * 2^iters  (mod p)
+```
+
+The ordinary point-add corrects this by applying `iters` halvings to the pair1
+slope and `iters` doublings before the pair2 cleanup.  Those two correction
+loops cost about **206k Toffoli** total, so a natural idea is to feed Kaliski a
+scaled denominator
+
+```text
+v' = 2^iters * v
+```
+
+which makes the exposed raw inverse exact:
+
+```text
+-(v')^-1 * 2^iters = -v^-1 .
+```
+
+This validated algebraically and at full-circuit level for pair1 when the
+prescaler used exact Cuccaro arithmetic:
+
+```text
+KAL_PRESCALE_PAIR1_SAFE=1
+avg_toffoli = 4,786,373
+qubits      = 2,972
+clean       = yes
+```
+
+The result is much worse than default because the generic phase-clean constant
+multiplier computes `2^407 mod p` by 183 modular doublings/halvings plus shifted
+adds, and it also keeps an extra scaled denominator register live.  The earlier
+fast version was classically correct but phase-unsafe:
+
+```text
+KAL_PRESCALE_PAIR1=1
+altseed_phase_batches_total = 1
+```
+
+Decision: scale absorption is a real algebraic lever, but not with the current
+constant-multiply primitive.  It only becomes interesting if we implement a
+secp256k1-specific phase-clean shifted-add prescaler for sparse constants like
+
+```text
+2^407 mod p = 2^151 * (2^32 + 977)
+```
+
+with total cost below roughly half a correction loop per side (≈50k Toffoli for
+compute+uncompute), and preferably without an extra persistent n-bit copy.

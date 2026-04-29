@@ -5944,6 +5944,33 @@ fn in_place_mul_const(b: &mut B, v: &[QubitId], c: U256, p: U256) {
 /// Maintains a doubling copy of x in a temp register; adds it to acc at
 /// positions where c has a bit set.
 fn mul_by_const_acc(b: &mut B, x: &[QubitId], c: U256, acc: &[QubitId], p: U256, subtract: bool) {
+    mul_by_const_acc_impl(b, x, c, acc, p, subtract, true);
+}
+
+/// Phase-clean variant of [`mul_by_const_acc`].  It uses exact Cuccaro based
+/// add/double/halve blocks rather than the measurement-based fast variants.
+/// This is too costly for production, but useful as an algebra-validating
+/// fallback when the fast constant multiplier introduces alt-seed phase.
+fn mul_by_const_acc_phase_clean(
+    b: &mut B,
+    x: &[QubitId],
+    c: U256,
+    acc: &[QubitId],
+    p: U256,
+    subtract: bool,
+) {
+    mul_by_const_acc_impl(b, x, c, acc, p, subtract, false);
+}
+
+fn mul_by_const_acc_impl(
+    b: &mut B,
+    x: &[QubitId],
+    c: U256,
+    acc: &[QubitId],
+    p: U256,
+    subtract: bool,
+    fast: bool,
+) {
     let n = x.len();
     if c == U256::ZERO {
         return;
@@ -5969,21 +5996,35 @@ fn mul_by_const_acc(b: &mut B, x: &[QubitId], c: U256, acc: &[QubitId], p: U256,
 
     for i in 0..=top {
         if bit(c, i) {
-            if subtract {
-                mod_sub_qq_fast(b, acc, &tmp, p);
+            if fast {
+                if subtract {
+                    mod_sub_qq_fast(b, acc, &tmp, p);
+                } else {
+                    mod_add_qq_fast(b, acc, &tmp, p);
+                }
+            } else if subtract {
+                mod_sub_qq(b, acc, &tmp, p);
             } else {
-                mod_add_qq_fast(b, acc, &tmp, p);
+                mod_add_qq(b, acc, &tmp, p);
             }
         }
         if i < top {
-            mod_double_inplace_fast(b, &tmp, p);
+            if fast {
+                mod_double_inplace_fast(b, &tmp, p);
+            } else {
+                mod_double_inplace(b, &tmp, p);
+            }
         }
     }
 
     // At this point tmp = x * 2^top mod p. Halve it back `top` times to
     // recover x, then uncompute via cx.
     for _ in 0..top {
-        mod_halve_inplace_fast(b, &tmp, p);
+        if fast {
+            mod_halve_inplace_fast(b, &tmp, p);
+        } else {
+            mod_halve_inplace(b, &tmp, p);
+        }
     }
     for i in 0..n {
         b.cx(x[i], tmp[i]);
@@ -7965,6 +8006,8 @@ fn build_standard_point_add(
     p: U256,
 ) {
     let pair2_branch_inv = std::env::var("KAL_PAIR2_BRANCH_INV_ROLL").ok().as_deref() == Some("1");
+    let prescale_pair1 = std::env::var("KAL_PRESCALE_PAIR1_SAFE").ok().as_deref() == Some("1");
+    let prescale_pair2 = std::env::var("KAL_PRESCALE_PAIR2_SAFE").ok().as_deref() == Some("1");
     let by_pair1_centered = std::env::var("BY_CENTERED_PAIR1_REPLACE").ok().as_deref() == Some("1");
     let by_pair2_centered = std::env::var("BY_CENTERED_PAIR2_REPLACE").ok().as_deref() == Some("1");
     let by_pair2_scaled_product = std::env::var("BY_SCALED_PAIR2_PRODUCT_REPLACE").ok().as_deref() == Some("1");
@@ -8136,6 +8179,29 @@ fn build_standard_point_add(
                 *lam_cell.borrow_mut() = Some(lam_inner);
             },
         );
+    } else if prescale_pair1 {
+        // Scale absorption probe: Kaliski raw output is `-v^-1 * 2^iters`.
+        // Feed `v = 2^iters * dx` so the exposed raw inverse is exactly
+        // `-dx^-1`; this deletes the pair1 correction-halving loop.  This
+        // SAFE path uses exact Cuccaro arithmetic because the generic fast
+        // prescaler was classically correct but alt-seed phase-unsafe.
+        let scaled_tx = b.alloc_qubits(N);
+        let scale = pow_mod_2_k(p, pair1_iters);
+        b.set_phase("pair1_prescale_den_safe");
+        mul_by_const_acc_phase_clean(b, &tx, scale, &scaled_tx, p, false);
+        b.set_phase("pair1_kaliski_forward_prescaled_safe");
+        with_kal_inv_raw(b, &scaled_tx, p, pair1_iters, |b, inv_raw| {
+            let lam_inner = b.alloc_qubits(N);
+            b.set_phase("pair1_prescale_mul1");
+            mod_mul_write_into_zero_acc_schoolbook(b, &lam_inner, &ty, inv_raw, p);
+            b.set_phase("pair1_prescale_mul2");
+            mod_mul_add_into_acc_schoolbook(b, &ty, &lam_inner, &tx, p);
+            b.set_phase("pair1_kaliski_backward_prescaled_safe");
+            *lam_cell.borrow_mut() = Some(lam_inner);
+        });
+        b.set_phase("pair1_unprescale_den_safe");
+        mul_by_const_acc_phase_clean(b, &tx, scale, &scaled_tx, p, true);
+        b.free_vec(&scaled_tx);
     } else {
         b.set_phase("pair1_kaliski_forward");
         with_kal_inv_raw(b, &tx, p, pair1_iters, |b, inv_raw| {
@@ -8194,6 +8260,23 @@ fn build_standard_point_add(
             b.set_phase("pair2_branch_inv_cleanup");
             mod_sub_qb(b, &ty, &oy, p);
         });
+    } else if prescale_pair2 {
+        // Pair2 scale absorption: feed `2^iters * (Rx-Qx)` so the raw inverse
+        // is exact and the lam-doubling correction loop disappears.
+        let scaled_tx = b.alloc_qubits(N);
+        let scale = pow_mod_2_k(p, pair2_iters);
+        b.set_phase("pair2_prescale_den_safe");
+        mul_by_const_acc_phase_clean(b, &tx, scale, &scaled_tx, p, false);
+        with_kal_inv_raw(b, &scaled_tx, p, pair2_iters, |b, inv_raw| {
+            b.set_phase("pair2_prescale_mul");
+            mod_mul_add_into_acc_schoolbook(b, &lam, inv_raw, &ty, p);
+            b.set_phase("pair2_prescale_cleanup");
+            mod_sub_qb(b, &ty, &oy, p);
+            b.set_phase("pair2_kaliski_backward_prescaled_safe");
+        });
+        b.set_phase("pair2_unprescale_den_safe");
+        mul_by_const_acc_phase_clean(b, &tx, scale, &scaled_tx, p, true);
+        b.free_vec(&scaled_tx);
     } else {
         with_kal_inv_raw(b, &tx, p, pair2_iters, |b, inv_raw| {
             b.set_phase("pair2_double");

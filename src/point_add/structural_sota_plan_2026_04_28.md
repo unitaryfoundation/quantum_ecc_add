@@ -1588,3 +1588,32 @@ correction is a known-mask bit of `z/x mod p`.  The toy-field ANF test
 `mbuc_product_cleanup_phase_oracle_is_not_low_degree_on_toy_field` shows degree
 15/16 and 32518/65536 monomial density for `p=251`.  This kills the cheap
 sparse/low-degree phase-correction hope; MBUC cleanup still hides a quotient.
+
+## 7. Post-E attempt: Kaliski scale absorption by denominator pre-scaling
+
+This is a smaller structural lever than deleting an inversion, but it attacks a
+measured ~206k correction-loop component.  Since raw Kaliski returns
+`-v^-1 * 2^iters`, feed it `v' = 2^iters v`; the exposed inverse becomes exact
+and the slope halving / cleanup doubling loops disappear.
+
+Pair1 was wired behind `KAL_PRESCALE_PAIR1_SAFE=1` using an exact Cuccaro
+constant prescaler and passed the full harness:
+
+```text
+avg_toffoli=4,786,373
+qubits=2,972
+altseed_classical_total=0
+altseed_phase_batches_total=0
+altseed_ancilla_batches_total=0
+```
+
+The generic prescaler makes the path much worse than default, but the algebraic
+lever is real.  A fast version using the existing measurement-based constant
+multiplier was classically correct but phase-unsafe (`altseed_phase_batches=1`).
+
+Decision: keep this as a narrow future primitive target only.  A useful
+production version requires a secp256k1-specific phase-clean shifted-add
+prescaler for `2^iters mod p` (e.g. `2^407 = 2^151(2^32+977) mod p`) costing
+well under ~50k Toffoli per compute/uncompute side and ideally folded into the
+Kaliski `v_w` initialization so it does not add a persistent n-bit denominator
+copy.  Without that primitive, scale absorption is not SOTA-relevant.

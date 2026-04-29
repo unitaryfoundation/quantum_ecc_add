@@ -1011,9 +1011,42 @@ emitted_ops = 79,499,589
 altseed/classical/phase/ancilla failures = 0
 ```
 
+`BY_CENTERED_WINDOW_Q_DENOM_REPLACE=1` extends that hook with the actual
+`pattern+q` payload: after the local 16-step signed simulator runs, it xors the
+34-bit signed `(q0,q1)` rows into raw per-window histories. The histories live
+across the real quotient replay/copy and are cleared by rerunning the same
+lowword oracle during denominator reverse. The q payload is not consumed yet,
+but it is now threaded through both real replacement sites:
+
+```text
+BY_CENTERED_PAIR1_REPLACE=1 BY_CENTERED_WINDOW_Q_DENOM_REPLACE=1
+avg_toffoli = 8,790,041
+qubits      = 8,037
+emitted_ops = 55,084,839
+altseed/classical/phase/ancilla failures = 0
+
+BY_CENTERED_PAIR2_REPLACE=1 BY_CENTERED_WINDOW_Q_DENOM_REPLACE=1
+avg_toffoli = 8,806,225
+qubits      = 8,037
+emitted_ops = 55,202,556
+altseed/classical/phase/ancilla failures = 0
+
+BY_CENTERED_PAIR1_REPLACE=1 BY_CENTERED_PAIR2_REPLACE=1 BY_CENTERED_WINDOW_Q_DENOM_REPLACE=1
+avg_toffoli = 13,483,808
+qubits      = 8,037
+emitted_ops = 79,514,277
+altseed/classical/phase/ancilla failures = 0
+```
+
+The Toffoli count is unchanged from the control-only window hook because q
+copyout is CNOT-only. The +2,448 qubit peak is exactly the raw
+`2 × 36 windows × 34 qbits` history bank; final architecture must consume q
+window-locally instead of persisting it.
+
 Next deletion: replace the 16 full-width selected-control microsteps with the
-`pattern+q` fixed-matrix/window update. The new window hook proves control
-selection composes; it does not yet consume the q corrections.
+`pattern+q` fixed-matrix/window update. The new window hooks prove control
+selection and q-payload threading compose; they do not yet consume the q
+corrections.
 
 Again, this is not a performance result. It proves both Kaliski inverse-sized
 objects in the real affine point-add can be replaced by centered BY tagged-DIV

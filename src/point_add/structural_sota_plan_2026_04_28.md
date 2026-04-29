@@ -1673,18 +1673,25 @@ DEBUG peak_qubits=2715 at phase='bk_step4'
 near peaks: bk_bulk_step4, kal_bulk_step4, kal_bulk_step6_7_8
 ```
 
-The analogous direct controlled-constant add path is **not clean** in the full
-harness:
+The analogous direct controlled-constant add path is logically valid but
+phase-cliff sensitive.  Standalone small basis/phase tests for both direct cadd
+and csub pass.  In the full point-add harness, direct cadd fails with the tuned
+375 Kaliski bulk prefix but passes with the conservative 370 prefix:
 
 ```text
 KAL_DIRECT_CONST_DOUBLE=1
 altseed_classical_total=1
 altseed_phase_batches_total=2
+
+KAL_DIRECT_CONST_DOUBLE=1 KAL_BULK3_ITERS=370
+avg_toffoli = 4,121,506
+qubits      = 2,716
+clean       = yes
 ```
 
-So keep only the halve flag as a validated low-qubit tradeoff.  If revisiting
-`cadd_nbit_const_direct_fast`, add a small standalone controlled-add basis/phase
-test first; do not debug it through the full point-add harness.
+So keep only the halve flag as the useful validated low-qubit tradeoff.  Direct
+cadd is an env-gated tested primitive, but it gives no qubit reduction and needs
+a less aggressive bulk prefix, so it is not a default-path optimization.
 
 Default exact path after adding the env-gated primitive remains unchanged:
 

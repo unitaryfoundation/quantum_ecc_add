@@ -797,13 +797,19 @@ measurement-uncomputes the borrow chain.  This removes the previous
 
 It is not a Toffoli win (default remains `4,111,918 @ 2716q`), but it is a much
 cheaper low-qubit lever than the older dirty-venting halve attempt.  The add
-analogue is not yet valid:
+analogue is a valid primitive in standalone tests, but phase-cliff sensitive in
+the full harness:
 
 ```text
 KAL_DIRECT_CONST_DOUBLE=1
 altseed_classical_total = 1
 altseed_phase_batches_total = 2
+
+KAL_DIRECT_CONST_DOUBLE=1 KAL_BULK3_ITERS=370
+avg_toffoli = 4,121,506
+qubits      = 2,716
+clean       = yes
 ```
 
-Do not enable the direct cadd path without first adding a standalone basis/phase
-test for `cadd_nbit_const_direct_fast`.
+So direct cadd is useful only as an env-gated tested tool; it does not improve
+the default Toffoli/qubit point.

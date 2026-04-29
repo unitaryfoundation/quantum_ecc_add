@@ -4379,22 +4379,30 @@ mod tests {
     ) {
         // Inverse of the centered halve with a stored parity bit: arithmetic
         // shift left, then if parity was set undo the sign-conditioned ±p.
+        // The correction controls must be uncomputed from the pre-correction
+        // sign.  When parity=1 the correction flips the sign, so using the
+        // post-correction sign leaves dirty controls and R-phase garbage.
         emit_arithmetic_shift_left_even_inverse_for_test(b, v);
+        let sign_hist = b.alloc_qubit();
         let add_ctrl = b.alloc_qubit();
         let sub_ctrl = b.alloc_qubit();
         let sign = v[v.len() - 1];
-        b.ccx(parity_hist, sign, add_ctrl);
-        b.x(sign);
-        b.ccx(parity_hist, sign, sub_ctrl);
-        b.x(sign);
+        b.cx(sign, sign_hist);
+        b.ccx(parity_hist, sign_hist, add_ctrl);
+        b.x(sign_hist);
+        b.ccx(parity_hist, sign_hist, sub_ctrl);
+        b.x(sign_hist);
         super::super::cadd_nbit_const_fast(b, v, p, add_ctrl);
         super::super::csub_nbit_const_fast(b, v, p, sub_ctrl);
-        b.x(sign);
-        b.ccx(parity_hist, sign, sub_ctrl);
-        b.x(sign);
-        b.ccx(parity_hist, sign, add_ctrl);
+        b.x(sign_hist);
+        b.ccx(parity_hist, sign_hist, sub_ctrl);
+        b.x(sign_hist);
+        b.ccx(parity_hist, sign_hist, add_ctrl);
         b.free(sub_ctrl);
         b.free(add_ctrl);
+        b.cx(sign, sign_hist);
+        b.cx(parity_hist, sign_hist);
+        b.free(sign_hist);
     }
 
     fn emit_signed_redundant_unhalve_centered_with_parity_exact_const_for_test(
@@ -4404,21 +4412,26 @@ mod tests {
         p: U256,
     ) {
         emit_arithmetic_shift_left_even_inverse_for_test(b, v);
+        let sign_hist = b.alloc_qubit();
         let add_ctrl = b.alloc_qubit();
         let sub_ctrl = b.alloc_qubit();
         let sign = v[v.len() - 1];
-        b.ccx(parity_hist, sign, add_ctrl);
-        b.x(sign);
-        b.ccx(parity_hist, sign, sub_ctrl);
-        b.x(sign);
+        b.cx(sign, sign_hist);
+        b.ccx(parity_hist, sign_hist, add_ctrl);
+        b.x(sign_hist);
+        b.ccx(parity_hist, sign_hist, sub_ctrl);
+        b.x(sign_hist);
         super::super::cadd_nbit_const(b, v, p, add_ctrl);
         super::super::csub_nbit_const(b, v, p, sub_ctrl);
-        b.x(sign);
-        b.ccx(parity_hist, sign, sub_ctrl);
-        b.x(sign);
-        b.ccx(parity_hist, sign, add_ctrl);
+        b.x(sign_hist);
+        b.ccx(parity_hist, sign_hist, sub_ctrl);
+        b.x(sign_hist);
+        b.ccx(parity_hist, sign_hist, add_ctrl);
         b.free(sub_ctrl);
         b.free(add_ctrl);
+        b.cx(sign, sign_hist);
+        b.cx(parity_hist, sign_hist);
+        b.free(sign_hist);
     }
 
     fn emit_scaled_by_centered_signed_microstep_inverse_live_parity_for_test(
@@ -7133,9 +7146,9 @@ mod tests {
         let exact_signed_phase = phases.iter().find(|(name, _, _, _)| *name == "exact_signed_only").unwrap().1;
         let exact_parity_phase = phases.iter().find(|(name, _, _, _)| *name == "exact_parity_controls").unwrap().1;
         let all_exact_phase = phases.iter().find(|(name, _, _, _)| *name == "all_exact").unwrap().1;
-        assert_eq!(fast_phase, 1, "fast centered parity clear should reproduce the MBU phase blocker");
-        assert_eq!(exact_signed_phase, 1, "making signed add/sub exact should not hide the parity-control blocker");
-        assert_eq!(exact_parity_phase, 0, "exact parity-controlled ±p corrections should remove the phase blocker");
+        assert_eq!(fast_phase, 0, "fixed unhalve sign history should make fast centered parity clear phase clean");
+        assert_eq!(exact_signed_phase, 0, "fixed unhalve sign history should also clean exact-signed variant");
+        assert_eq!(exact_parity_phase, 0, "exact parity-controlled ±p corrections should remain phase clean");
         assert_eq!(all_exact_phase, 0, "all-exact centered parity-clear roundtrip should be phase clean");
     }
 
@@ -7224,7 +7237,7 @@ mod tests {
     }
 
     #[test]
-    fn centered_signed_fast_signed_phase_after_exact_parity_controls_is_data_dependent() {
+    fn centered_signed_fast_signed_phase_after_exact_parity_controls_is_clean_after_unhalve_fix() {
         const WIDE: usize = 260;
         const STEPS: usize = 560;
         let p = SECP256K1_P;
@@ -7282,8 +7295,8 @@ mod tests {
             for &q in &parity { assert_eq!(sim.qubit(q) & 1, 0, "sample {sample}: parity not clean"); }
             saw[(sim.global_phase() & 1) as usize] = true;
         }
-        eprintln!("BY centered exact-parity/fast-signed full clean phases: saw0={}, saw1={}", saw[0], saw[1]);
-        assert!(saw[0] && saw[1], "fast signed-control phase was only a global constant; a neg correction might be enough");
+        eprintln!("BY centered exact-parity/fast-signed full clean phases after unhalve fix: saw0={}, saw1={}", saw[0], saw[1]);
+        assert!(saw[0] && !saw[1], "fixed unhalve sign history should remove data-dependent fast signed-control phase");
     }
 
     #[test]
@@ -7473,6 +7486,96 @@ mod tests {
         }
         eprintln!("BY centered negboth signed-control phase test: ccx={ccx}, saw0={}, saw1={}", saw[0], saw[1]);
         assert!(saw[0] && saw[1], "neg_if on all signed MBU measurements unexpectedly fixed the cleaned-control phase");
+    }
+
+    #[test]
+    fn centered_clean_roundtrip_fixed_trace_for_benchmark_hook_is_phase_clean() {
+        const WIDE: usize = 260;
+        const STEPS: usize = 560;
+        const ODD_WORDS: [u64; 9] = [
+            0x9f0102a4a879b9a7,
+            0x39950f607ecb1db3,
+            0xefaf7e99e64fb43a,
+            0x6f3857abf7ed1f44,
+            0x5b90e29f6d3d3b0c,
+            0xb9f3f86e0ff7143e,
+            0xb54e3a746addb473,
+            0xd88e00e18c323864,
+            0x00000000066e560a,
+        ];
+        const A_WORDS: [u64; 9] = [
+            0x9501008408488925,
+            0x0881002054411510,
+            0x2525548924450402,
+            0x2508548955211544,
+            0x4910209521111104,
+            0x8911080205550412,
+            0x9542124422548410,
+            0x4802002104120824,
+            0x0000000002220202,
+        ];
+        let p = SECP256K1_P;
+        let mut sx = Sampler::new(b"by-centered-clean560-x-v1", p);
+        let mut sy = Sampler::new(b"by-centered-clean560-y-v1", p);
+        let x = sx.next();
+        let y = sy.next();
+        let start_s = sw_centered_from_u256_for_test(addm(y, x, p), p);
+        let mut delta = 1i64;
+        let mut f = SInt::from_u(p);
+        let mut g = SInt::from_u(x);
+        let mut controls = Vec::with_capacity(STEPS);
+        for _ in 0..STEPS {
+            let odd_v = g.bit0();
+            let a_v = delta > 0 && odd_v;
+            controls.push((odd_v, a_v));
+            divstep_sint_state(&mut delta, &mut f, &mut g);
+        }
+        for i in 0..STEPS {
+            assert_eq!(controls[i].0, ((ODD_WORDS[i / 64] >> (i % 64)) & 1) != 0, "odd bit mismatch {i}");
+            assert_eq!(controls[i].1, ((A_WORDS[i / 64] >> (i % 64)) & 1) != 0, "A bit mismatch {i}");
+        }
+        let mut b = super::super::B::new();
+        let odd = b.alloc_qubits(STEPS);
+        let a_ctrl = b.alloc_qubits(STEPS);
+        let parity = b.alloc_qubits(STEPS);
+        let r = b.alloc_qubits(WIDE);
+        let s = b.alloc_qubits(WIDE);
+        for i in 0..STEPS {
+            if controls[i].0 { b.x(odd[i]); }
+            if controls[i].1 { b.x(a_ctrl[i]); }
+        }
+        for i in 0..STEPS {
+            emit_scaled_by_centered_signed_microstep_live_parity_variant_for_test(
+                &mut b, &r, &s, odd[i], a_ctrl[i], parity[i], p, true, true,
+            );
+        }
+        for i in (0..STEPS).rev() {
+            emit_scaled_by_centered_signed_microstep_inverse_live_parity_variant_for_test(
+                &mut b, &r, &s, odd[i], a_ctrl[i], parity[i], p, true, true,
+            );
+            emit_centered_signed_clear_parity_after_inverse_for_test(&mut b, &r, &s, odd[i], parity[i]);
+        }
+        for i in (0..STEPS).rev() {
+            if controls[i].1 { b.x(a_ctrl[i]); }
+            if controls[i].0 { b.x(odd[i]); }
+        }
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let mut hasher = sha3::Shake128::default();
+        hasher.update(b"by-centered-clean560-fixed-hook-sim-v1");
+        let mut xof = hasher.finalize_xof();
+        let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+        set_slice_u512_by(&mut sim, &r, U512::ZERO);
+        set_slice_u512_by(&mut sim, &s, sw_twos_for_width_for_test(start_s, WIDE));
+        sim.apply(&ops);
+        assert_eq!(get_slice_u512_by(&sim, &r), U512::ZERO, "fixed hook r not restored");
+        assert_eq!(get_slice_u512_by(&sim, &s), sw_twos_for_width_for_test(start_s, WIDE), "fixed hook s not restored");
+        for &q in odd.iter().chain(a_ctrl.iter()).chain(parity.iter()) {
+            assert_eq!(sim.qubit(q) & 1, 0, "fixed hook control/parity not clean");
+        }
+        eprintln!("BY centered clean fixed trace hook test: phase={}, qubits={num_qubits}", sim.global_phase() & 1);
+        assert_eq!(sim.global_phase() & 1, 0, "fixed hook all-exact roundtrip phase garbage");
     }
 
     #[test]

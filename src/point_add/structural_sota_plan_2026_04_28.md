@@ -811,38 +811,46 @@ altseed/classical/phase/ancilla failures = 0
 ```
 
 Default path remains unchanged at `4,111,918 Toffoli @ 2,716q`. A stronger
-nonzero forward+inverse centered roundtrip hook was also attempted, clearing
-parity from restored pre-step rows. It was classically/ancilla clean but failed
-phase on every altseed batch (`320` phase batches), so the hook was reverted.
-This mirrors the earlier A-clear lesson: MBU signed add/sub phase dependencies
-must be respected by the parity cleanup schedule.
+nonzero forward+inverse centered roundtrip hook was initially classically and
+ancilla clean but phase dirty. The root cause was not the signed MBU adders: it
+was the centered **unhalve** cleanup. The inverse correction chose add/sub
+controls from the doubled value's sign, but tried to uncompute them from the
+post-correction sign; when parity=1 that sign flips. Keeping a one-qubit
+`sign_hist` through the correction fixes the dirty controls and their R-phase.
 
-The phase blocker has now been isolated in `by.rs` with controlled variants:
+After the unhalve sign-history fix, the phase isolation changed to:
 
 ```text
 96-step centered forward+inverse+parity-clear variants
-fast MBU controls:          299,616 CCX, phase=1
-exact signed add/sub only:  399,264 CCX, phase=1
+fast MBU controls:          299,616 CCX, phase=0
+exact signed add/sub only:  399,264 CCX, phase=0
 exact parity ±p controls:   448,800 CCX, phase=0
 all exact controls:         548,448 CCX, phase=0
 
-560-step all-exact clean roundtrip: 3,199,280 CCX, peak=2,464q, phase=0
-560-step exact-parity/fast-signed: data-dependent phase (saw phase 0 and 1)
+560-step exact-parity/fast-signed: saw only phase 0 across 12 samples
+fixed-trace all-exact hook unit:   phase=0, qubits=2,464
 ```
 
-So a fully clean centered replay roundtrip exists under the current qubit cap,
-but only by making the MBU-controlled arithmetic exact, which is far too
-expensive. The important structural lesson is sharper than before: the dirty
-parity bits are not the only issue; any replay control that will later be
-cleaned must either avoid MBU phase dependencies or carry an explicit phase
-witness/live-flag that is cleaned with it. A global `Neg` cannot fix this,
-because exact-parity/fast-signed cleanup has data-dependent phase. Simple
-sign-flip patches to the MBU measurements do not work either:
-`negating_signed_copy_measurements_does_not_fix_centered_control_phase`,
-`negating_cuccaro_carry_measurements_does_not_fix_centered_control_phase`, and
-`negating_all_signed_mbu_measurements_does_not_fix_centered_control_phase` all
-still see both phase values over 560-step samples at the same `2,618,000` CCX
-exact-parity/fast-signed cost.
+The requested all-exact fallback is now wired into the real benchmark path as
+`BY_CENTERED_CLEAN_ROUNDTRIP_BENCH=1`. It carries a fixed real BY control trace
+(raw odd/A plus parity), runs 560 all-exact centered steps, reverses them, and
+cleans parity from restored rows. Because the hook changes the circuit hash, it
+uses the earlier safe Kaliski bulk prefix `370` under this env flag only. The
+real harness accepts it:
+
+```text
+BY_CENTERED_CLEAN_ROUNDTRIP_BENCH=1
+avg_toffoli = 7,311,738
+qubits      = 2,976
+emitted_ops = 42,092,380
+altseed/classical/phase/ancilla failures = 0
+```
+
+This is intentionally not SOTA-shaped, but it proves the clean centered
+forward+inverse/parity-clear object can live in the benchmark harness. More
+importantly, the sign-history fix reopens the fast MBU centered cleanup path:
+the previous data-dependent phase diagnosis was polluted by a dirty unhalve
+control, not necessarily by a fundamental signed-adder phase witness.
 
 Naively synthesizing the range test is too expensive:
 `naive_centered_parity_recovery_cost_would_erase_redundant_replay_win` measures

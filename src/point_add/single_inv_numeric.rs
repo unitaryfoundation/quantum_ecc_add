@@ -2246,6 +2246,63 @@ mod tests {
         assert!(scratch_p99 > 770.0);
     }
 
+    fn euclid_quotient_payload_parity_anf_stats(n: usize, p: u16) -> (usize, usize) {
+        let size = 1usize << n;
+        let mut anf = vec![0u8; size];
+        for x in 1..p {
+            let mut u = p as u32;
+            let mut v = x as u32;
+            let mut parity = 0u8;
+            while v != 0 {
+                let q = u / v;
+                parity ^= (q.count_ones() as u8) & 1;
+                let rem = u - q * v;
+                u = v;
+                v = rem;
+            }
+            anf[x as usize] = parity;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&c| c != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| if c != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density)
+    }
+
+    #[test]
+    fn mbuc_of_euclid_quotient_history_is_dense_too() {
+        // If quotient history is too large, another standard escape is to
+        // measure it and pay only the MBUC phase correction.  A representative
+        // measurement mask (xor of all quotient payload bits) is already
+        // essentially maximal-degree/half-dense as a function of x on toy
+        // fields.  So Euclidean quotient history cannot be made cheap by
+        // generic MBUC/kickmix either.
+        let cases = [(8usize, 251u16), (10, 1021), (12, 4093)];
+        for &(n, p) in &cases {
+            let (degree, density) = euclid_quotient_payload_parity_anf_stats(n, p);
+            let table = 1usize << n;
+            eprintln!(
+                "Euclid quotient-history payload parity ANF: n={n}, degree={degree}, density={density}/{table}"
+            );
+            if n == 12 {
+                println!("METRIC euclid_quotient_mbu_degree_n12={degree}");
+                println!("METRIC euclid_quotient_mbu_density_n12={density}");
+            }
+            assert!(degree + 1 >= n);
+            assert!(density > table / 3);
+        }
+    }
+
     #[test]
     fn mbuc_product_cleanup_phase_oracle_is_not_low_degree_on_toy_field() {
         // Another possible rescue for Strategy E: compute product into a clean

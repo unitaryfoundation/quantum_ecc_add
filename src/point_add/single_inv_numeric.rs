@@ -2650,6 +2650,55 @@ mod tests {
         out
     }
 
+    fn plusminus_scaled_coeff_width_for_divisor(x: U256, p: U256) -> (usize, usize, usize, usize) {
+        // Keep coefficients over the integers with a global denominator 2^S:
+        //   value = coeff * x / 2^S (mod p).
+        // A plus-minus step d=(u-v)/2^k updates cd=cu-cv while any retained
+        // old v gets multiplied by 2^k to share the new global scale.  If these
+        // scaled coefficients stayed near 256 bits, unary shifts could be cheap
+        // relabels instead of modular controlled halvings.  If they grow toward
+        // the total shift count, the representation spends the same state the
+        // unary stream saved.
+        assert!(!x.is_zero());
+        let mut u = u512_from_u256_for_halfgcd_test(p);
+        let mut v = u512_from_u256_for_halfgcd_test(x);
+        let initial_twos = x.trailing_zeros() as usize;
+        v >>= initial_twos;
+        let mut scale = initial_twos;
+        let mut cu = smag_for_halfgcd_test(false, U512::ZERO);
+        let mut cv = smag_for_halfgcd_test(false, U512::from(1u64));
+        let mut max_bits = 1usize;
+        let mut steps = 0usize;
+        if u < v {
+            core::mem::swap(&mut u, &mut v);
+            core::mem::swap(&mut cu, &mut cv);
+        }
+        while u != v {
+            let mut d = u - v;
+            let k = d.trailing_zeros() as usize;
+            d >>= k;
+            let cd = signed_add_for_halfgcd_test(cu, signed_neg_for_halfgcd_test(cv));
+            let cv_scaled = smag_for_halfgcd_test(cv.neg, cv.mag << k);
+            scale += k;
+            max_bits = max_bits
+                .max(u512_bit_len_for_halfgcd_test(cd.mag))
+                .max(u512_bit_len_for_halfgcd_test(cv_scaled.mag));
+            steps += 1;
+            if v >= d {
+                u = v;
+                v = d;
+                cu = cv_scaled;
+                cv = cd;
+            } else {
+                u = d;
+                cu = cd;
+                cv = cv_scaled;
+            }
+        }
+        assert_eq!(u, U512::from(1u64));
+        (max_bits, scale, steps, initial_twos)
+    }
+
     fn plusminus_kseq_dirs_for_toy(x: u16, p: u16) -> (Vec<usize>, Vec<u8>) {
         let mut u = p as u32;
         let mut v = (x as u32) >> x.trailing_zeros();
@@ -3279,6 +3328,55 @@ mod tests {
         println!("METRIC plusminus_unary_controlled_gap_p99_to_2700k={gap_p99}");
         println!("METRIC plusminus_unary_controlled_scratch_max={scratch_max}");
         assert!(cadd_ccx > 0 && cshift_ccx > 0, "controlled primitive accounting should be nonzero");
+    }
+
+    #[test]
+    fn plusminus_scaled_integer_coefficients_make_shifts_cheap_but_width_kills() {
+        // Escape hatch after controlled modular shifts cost 1280 CCX: keep a
+        // globally 2^S-scaled integer coefficient pair so each unary shift is a
+        // cheap left shift/relabel, not a controlled modular halve.  This test
+        // charges the missing state width.  The coefficients grow with the same
+        // accumulated shift count that made the unary stream fit, so the cheap
+        // shift representation is not automatically a 663-scratch DIV.
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0x51f7_6635_ca1e_d123u64;
+        let mut widths = Vec::with_capacity(samples);
+        let mut scales = Vec::with_capacity(samples);
+        let mut steps_v = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let (w, scale, steps, _initial_twos) = plusminus_scaled_coeff_width_for_divisor(x, p);
+            widths.push(w);
+            scales.push(scale);
+            steps_v.push(steps);
+        }
+        widths.sort_unstable();
+        scales.sort_unstable();
+        steps_v.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let p999 = samples * 999 / 1000;
+        let width_p99 = widths[p99];
+        let width_p999 = widths[p999];
+        let width_max = *widths.last().unwrap();
+        let scale_p99 = scales[p99];
+        let scale_max = *scales.last().unwrap();
+        let steps_p99 = steps_v[p99];
+        let two_coeff_scratch_max = 2 * width_max;
+        let one_den_one_coeff_scratch_max = 256 + width_max;
+        eprintln!(
+            "plus-minus scaled integer coeffs: width_p99={width_p99}, width_p999={width_p999}, width_max={width_max}, scale_p99={scale_p99}, scale_max={scale_max}, steps_p99={steps_p99}, two_coeff_scratch_max={two_coeff_scratch_max}"
+        );
+        println!("METRIC plusminus_scaled_coeff_width_p99={width_p99}");
+        println!("METRIC plusminus_scaled_coeff_width_p999={width_p999}");
+        println!("METRIC plusminus_scaled_coeff_width_max={width_max}");
+        println!("METRIC plusminus_scaled_coeff_scale_p99={scale_p99}");
+        println!("METRIC plusminus_scaled_coeff_scale_max={scale_max}");
+        println!("METRIC plusminus_scaled_coeff_steps_p99={steps_p99}");
+        println!("METRIC plusminus_scaled_coeff_two_coeff_scratch_max={two_coeff_scratch_max}");
+        println!("METRIC plusminus_scaled_coeff_one_den_one_coeff_scratch_max={one_den_one_coeff_scratch_max}");
+        assert!(width_max > 0, "scaled coefficient accounting should be nonzero");
     }
 
     #[test]

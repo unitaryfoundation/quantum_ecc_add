@@ -203,7 +203,9 @@ Examples worth probing only if they meet the budget gate up front:
 
 ### 2. BY selected/window-local denominator primitive
 
-BY remains the best fully charged near-miss, but the missing primitive is precise:
+BY remains the best fully charged near-miss, but the missing primitive is precise. The first16/tail streaming-selector low-gate detour was checked and demoted: it fit 1425q scratch at `736` bits but a forward-only fresh tail carry update already exceeded the remaining low-gate Toffoli margin before cleanup/reversibility.
+
+The remaining BY revival condition is:
 
 ```text
 <= ~10k CCX per 16-step denominator window

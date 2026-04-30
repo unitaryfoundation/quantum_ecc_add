@@ -3077,6 +3077,84 @@ mod tests {
         assert!(max_gap < 0, "sampled max tail carry lower bound misses low-gate margin");
     }
 
+    fn tail_carry_fresh_update_cost_for_by_budget(mtx: TransitionMatrix) -> usize {
+        const C0_WIDTH: usize = 17 * 16;
+        const C1_WIDTH: usize = 16 * 16;
+        const TMP_WIDTH: usize = C0_WIDTH + 16;
+        let mut b = super::super::B::new();
+        let c0 = b.alloc_qubits(C0_WIDTH);
+        let c1 = b.alloc_qubits(C1_WIDTH);
+        let y0 = b.alloc_qubits(TMP_WIDTH);
+        let y1 = b.alloc_qubits(TMP_WIDTH);
+        add_signed_coeff_times_for_cost(&mut b, mtx.m00, &c0, &y0);
+        add_signed_coeff_times_for_cost(&mut b, mtx.m01, &c1, &y0);
+        add_signed_coeff_times_for_cost(&mut b, mtx.m10, &c0, &y1);
+        add_signed_coeff_times_for_cost(&mut b, mtx.m11, &c1, &y1);
+        arith_shift_right_inplace_for_cost(&mut b, &y0, 16);
+        arith_shift_right_inplace_for_cost(&mut b, &y1, 16);
+        count_ccx(&b.ops)
+    }
+
+    #[test]
+    fn first16_tail_carry_fresh_update_circuit_kills_lowgate_margin() {
+        // The previous CSD arithmetic lower bound fit with only ~10k CCX to
+        // spare. This is the promised actual-circuit checkpoint. It is still
+        // generous: it computes each tail carry update into fresh rows, does not
+        // clean the old carry rows, does not uncompute low-word/pattern logic,
+        // and uses a fixed known matrix rather than quantum-selected controls.
+        // If even this forward-only fresh update exceeds the 66,292 CCX margin,
+        // the first16/tail low-gate subpath is not worth deeper engineering.
+        use std::collections::HashMap;
+        const W: usize = 16;
+        const PREFIX_WINDOWS: usize = 16;
+        const WINDOWS: usize = 35;
+        const SAMPLES: usize = 64;
+        let mut sampler = Sampler::new(b"by-tail-carry-fresh-circuit-v1", SECP256K1_P);
+        let mut cache: HashMap<(i128, i128, i128, i128), usize> = HashMap::new();
+        let mut costs = Vec::with_capacity(SAMPLES);
+        for _ in 0..SAMPLES {
+            let x = sampler.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(SECP256K1_P);
+            let mut g = SInt::from_u(x);
+            let mut cost = 0usize;
+            for win in 0..WINDOWS {
+                let f_low = low_signed_sint16_for_streaming_test(f);
+                let g_low = low_signed_sint16_for_streaming_test(g);
+                let bits = branch_bits_for_lowword_window(W, delta, f_low, g_low);
+                let m = matrix_from_branch_bits(delta, &bits);
+                if win >= PREFIX_WINDOWS {
+                    let key = (m.m00, m.m01, m.m10, m.m11);
+                    let c = *cache.entry(key).or_insert_with(|| tail_carry_fresh_update_cost_for_by_budget(m));
+                    cost += c;
+                }
+                for _ in 0..W {
+                    divstep_sint_state(&mut delta, &mut f, &mut g);
+                }
+            }
+            costs.push(cost);
+        }
+        costs.sort_unstable();
+        let mean = costs.iter().sum::<usize>() as f64 / SAMPLES as f64;
+        let p90 = costs[(SAMPLES * 90) / 100];
+        let p99 = costs[(SAMPLES * 99) / 100];
+        let max = costs[SAMPLES - 1];
+        let remaining_after_first16_pattern = 66_292isize;
+        let p90_gap = p90 as isize - remaining_after_first16_pattern;
+        let min_cached_window = cache.values().copied().min().unwrap_or(0);
+        let max_cached_window = cache.values().copied().max().unwrap_or(0);
+        eprintln!("BY tail carry fresh-update circuit: unique_matrices={}, min_window={min_cached_window}, max_window={max_cached_window}, mean={mean:.1}, p90={p90}, p99={p99}, max={max}, p90_gap={p90_gap}", cache.len());
+        println!("METRIC by_tail_carry_fresh_unique_matrices={}", cache.len());
+        println!("METRIC by_tail_carry_fresh_window_min_ccx={min_cached_window}");
+        println!("METRIC by_tail_carry_fresh_window_max_ccx={max_cached_window}");
+        println!("METRIC by_tail_carry_fresh_mean_ccx={mean:.3}");
+        println!("METRIC by_tail_carry_fresh_p90_ccx={p90}");
+        println!("METRIC by_tail_carry_fresh_p99_ccx={p99}");
+        println!("METRIC by_tail_carry_fresh_max_ccx={max}");
+        println!("METRIC by_tail_carry_fresh_gap_to_remaining_ccx={p90_gap}");
+        assert!(p90_gap > 0, "fresh forward-only tail carry update fits low-gate margin; build real reversible version");
+    }
+
     #[test]
     fn projective_normalized_streaming_selector_loses_high_bits() {
         // Tempting compression: since BY branch choices are invariant under a

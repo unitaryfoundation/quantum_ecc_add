@@ -1149,6 +1149,115 @@ mod tests {
         assert!(gap_20ppm > 0, "harness-scale approximate cutoff unexpectedly funds old lowword BY route");
     }
 
+    fn approx_odd_pattern_from_truncated_lowbits_for_test(
+        w: usize,
+        mut t: usize,
+        mut delta: i64,
+        f: SInt,
+        g: SInt,
+    ) -> u16 {
+        let mut ff = sint_low_i128(f, t);
+        let mut gg = sint_low_i128(g, t);
+        let mut pattern = 0u16;
+        for i in 0..w {
+            ff = truncate_i128(ff, t);
+            gg = truncate_i128(gg, t);
+            let odd = (gg & 1) != 0;
+            if odd {
+                pattern |= 1u16 << i;
+            }
+            if delta > 0 && odd {
+                let nf = gg;
+                let ng = (gg - ff) / 2;
+                delta = 1 - delta;
+                ff = nf;
+                gg = ng;
+            } else if odd {
+                let ng = (gg + ff) / 2;
+                delta = 1 + delta;
+                gg = ng;
+            } else {
+                let ng = gg / 2;
+                delta = 1 + delta;
+                gg = ng;
+            }
+            t = t.saturating_sub(1);
+        }
+        pattern
+    }
+
+    #[test]
+    fn truncated_lowword_patterns_are_not_harness_clean() {
+        // Gidney-style truncation works for high-bit residue accumulation
+        // because the algorithm masks approximation error.  BY branch patterns
+        // are the opposite: they are 2-adic low-bit controls.  If we copy fewer
+        // than 16 low bits and guess the rest of a 16-step window, the selected
+        // microprogram changes too often to survive a 9024-case harness.
+        const W: usize = 16;
+        const WINDOWS: usize = 35;
+        let samples = 20_000usize;
+        let mut sampler = Sampler::new(b"by-truncated-lowword-pattern-v1", SECP256K1_P);
+        let ts = [8usize, 10, 12, 14, 15];
+        let mut window_mismatches = vec![0usize; ts.len()];
+        let mut trajectory_mismatches = vec![0usize; ts.len()];
+        for _ in 0..samples {
+            let x = sampler.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(SECP256K1_P);
+            let mut g = SInt::from_u(x);
+            let mut any = vec![false; ts.len()];
+            for _ in 0..WINDOWS {
+                let start_delta = delta;
+                let start_f = f;
+                let start_g = g;
+                let mut true_pattern = 0u16;
+                for i in 0..W {
+                    if g.bit0() {
+                        true_pattern |= 1u16 << i;
+                    }
+                    divstep_sint_state(&mut delta, &mut f, &mut g);
+                }
+                for (j, &t) in ts.iter().enumerate() {
+                    let approx = approx_odd_pattern_from_truncated_lowbits_for_test(W, t, start_delta, start_f, start_g);
+                    if approx != true_pattern {
+                        window_mismatches[j] += 1;
+                        any[j] = true;
+                    }
+                }
+            }
+            for (j, hit) in any.into_iter().enumerate() {
+                if hit {
+                    trajectory_mismatches[j] += 1;
+                }
+            }
+        }
+        let ppm = |count: usize, total: usize| -> usize { count * 1_000_000 / total };
+        let total_windows = samples * WINDOWS;
+        let window_t8 = ppm(window_mismatches[0], total_windows);
+        let window_t12 = ppm(window_mismatches[2], total_windows);
+        let window_t14 = ppm(window_mismatches[3], total_windows);
+        let window_t15 = ppm(window_mismatches[4], total_windows);
+        let traj_t14 = ppm(trajectory_mismatches[3], samples);
+        let traj_t15 = ppm(trajectory_mismatches[4], samples);
+        let selector_t14 = (5_952usize * 14).div_ceil(16) * WINDOWS;
+        let selector_t15 = (5_952usize * 15).div_ceil(16) * WINDOWS;
+        let selector_saving_t14 = 5_952usize * WINDOWS - selector_t14;
+        let selector_saving_t15 = 5_952usize * WINDOWS - selector_t15;
+        println!("METRIC by_trunc_lowword_window_mismatch_t8_ppm={window_t8}");
+        println!("METRIC by_trunc_lowword_window_mismatch_t12_ppm={window_t12}");
+        println!("METRIC by_trunc_lowword_window_mismatch_t14_ppm={window_t14}");
+        println!("METRIC by_trunc_lowword_window_mismatch_t15_ppm={window_t15}");
+        println!("METRIC by_trunc_lowword_trajectory_mismatch_t14_ppm={traj_t14}");
+        println!("METRIC by_trunc_lowword_trajectory_mismatch_t15_ppm={traj_t15}");
+        println!("METRIC by_trunc_lowword_selector_saving_t14_ccx={selector_saving_t14}");
+        println!("METRIC by_trunc_lowword_selector_saving_t15_ccx={selector_saving_t15}");
+        eprintln!(
+            "BY truncated lowword patterns: window mismatch ppm t8={window_t8}, t12={window_t12}, t14={window_t14}, t15={window_t15}; trajectory ppm t14={traj_t14}, t15={traj_t15}; selector savings t14={selector_saving_t14}, t15={selector_saving_t15}"
+        );
+        assert!(traj_t15 > 10_000, "15-bit truncated lowword pattern would be harness-clean enough to revisit");
+        assert!(selector_saving_t15 < 20_000, "15-bit truncation unexpectedly saves enough selector cost");
+    }
+
     fn two_inv_pow(p: U256, iters: usize) -> U256 {
         let two_inv = (p.wrapping_add(U256::from(1))) >> 1;
         let mut acc = U256::from(1);

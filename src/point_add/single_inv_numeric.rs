@@ -3832,6 +3832,97 @@ mod tests {
         b.x(one);
     }
 
+    fn emit_plusminus_inplace_step_inverse_for_test(
+        b: &mut super::super::B,
+        u: &[super::super::QubitId],
+        v: &[super::super::QubitId],
+        cu: &[super::super::QubitId],
+        cv: &[super::super::QubitId],
+        active: &[super::super::QubitId],
+        hist: &[super::super::QubitId],
+        spill: super::super::QubitId,
+        flag: super::super::QubitId,
+        one: super::super::QubitId,
+    ) {
+        b.x(one);
+        for i in 0..u.len() {
+            local_cswap_for_plusminus_cost(b, flag, u[i], v[i]);
+            local_cswap_for_plusminus_cost(b, flag, cu[i], cv[i]);
+        }
+        // After unswapping, flag is exactly (u < v) for u=d>>k and v=old_v.
+        super::super::cmp_lt_into(b, u, v, flag);
+        for &h in hist.iter().rev() {
+            emit_controlled_left_shift_nooverflow_inverse_for_plusminus(b, cv, h, spill);
+        }
+        emit_controlled_integer_add_for_plusminus(b, cu, cv, one, false); // cu=cd+cv=old cu
+        for &h in hist.iter().rev() {
+            emit_controlled_left_shift_nooverflow_for_plusminus(b, u, h, spill); // u=d
+        }
+        emit_trailing_zero_active_chain_history_for_plusminus(b, u, active, hist); // clear hist
+        super::super::add_nbit_qq_fast(b, v, u); // u=old u
+        b.x(one);
+    }
+
+    #[test]
+    fn plusminus_inplace_one_step_roundtrip_is_clean() {
+        // Actual in-place forward followed by explicit inverse. This is the
+        // critical quantum-compatibility test for a wireable step: history and
+        // direction are produced, used to reverse, and then cleaned with no
+        // fresh old/new lane coexistence.
+        use sha3::digest::{ExtendableOutput, Update};
+        const W: usize = 16;
+        let mut b = super::super::B::new();
+        let u = b.alloc_qubits(W);
+        let v = b.alloc_qubits(W);
+        let cu = b.alloc_qubits(W);
+        let cv = b.alloc_qubits(W);
+        let active = b.alloc_qubits(W + 1);
+        let hist = b.alloc_qubits(W);
+        let spill = b.alloc_qubit();
+        let flag = b.alloc_qubit();
+        let one = b.alloc_qubit();
+        let start = b.ops.len();
+        emit_plusminus_inplace_step_forward_for_test(&mut b, &u, &v, &cu, &cv, &active, &hist, spill, flag, one);
+        emit_plusminus_inplace_step_inverse_for_test(&mut b, &u, &v, &cu, &cv, &active, &hist, spill, flag, one);
+        let ccx = local_count_ccx_for_plusminus_cost(&b.ops[start..]);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let mask = (1u64 << W) - 1;
+        let cases = [(37u64, 5u64), (91, 27), (128, 64), (201, 77), (255, 127)];
+        for &(uval, vval) in &cases {
+            for cuv in [0u64, 1, 7, 123] {
+                for cvv in [0u64, 3, 11, 15] {
+                    let mut hasher = sha3::Shake128::default();
+                    hasher.update(b"plusminus-inplace-one-step-roundtrip-v1");
+                    let mut xof = hasher.finalize_xof();
+                    let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+                    set_slice_u512_pm(&mut sim, &u, U512::from(uval));
+                    set_slice_u512_pm(&mut sim, &v, U512::from(vval));
+                    set_slice_u512_pm(&mut sim, &cu, U512::from(cuv));
+                    set_slice_u512_pm(&mut sim, &cv, U512::from(cvv));
+                    sim.apply(&ops);
+                    assert_eq!(get_slice_u512_pm(&sim, &u).as_limbs()[0] & mask, uval & mask, "u changed");
+                    assert_eq!(get_slice_u512_pm(&sim, &v).as_limbs()[0] & mask, vval & mask, "v changed");
+                    assert_eq!(get_slice_u512_pm(&sim, &cu).as_limbs()[0] & mask, cuv & mask, "cu changed");
+                    assert_eq!(get_slice_u512_pm(&sim, &cv).as_limbs()[0] & mask, cvv & mask, "cv changed");
+                    assert_eq!(get_slice_u512_pm(&sim, &active), U512::ZERO, "active not clean");
+                    assert_eq!(get_slice_u512_pm(&sim, &hist), U512::ZERO, "hist not clean");
+                    assert_eq!(sim.qubit(spill) & 1, 0, "spill not clean");
+                    assert_eq!(sim.qubit(flag) & 1, 0, "flag not clean");
+                    assert_eq!(sim.qubit(one) & 1, 0, "one not clean");
+                    assert_eq!(sim.global_phase() & 1, 0, "unexpected phase");
+                }
+            }
+        }
+        eprintln!("plus-minus in-place one-step roundtrip: width={W}, ccx={ccx}, peak={peak}");
+        println!("METRIC plusminus_inplace_roundtrip_width={W}");
+        println!("METRIC plusminus_inplace_roundtrip_ccx={ccx}");
+        println!("METRIC plusminus_inplace_roundtrip_peak_q={peak}");
+        assert!(ccx > 0 && peak > 0);
+    }
+
     #[test]
     fn plusminus_inplace_one_step_forward_matches_classical() {
         // First genuinely low-scratch productive step: mutate (u,v,cu,cv) in

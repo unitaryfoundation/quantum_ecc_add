@@ -6844,6 +6844,81 @@ mod tests {
     }
 
     #[test]
+    fn lowword_pattern_selector_subwindow_budget_probe() {
+        // The scratch-600 frontier says the streamed-mask BY replay is only
+        // ~65k CCX over the 2.7M target after charging the old W=16 lowword
+        // selector.  Before looking for exotic selectors, check whether simply
+        // using narrower lowword pattern windows lowers the branch-source cost.
+        // This charges both the reversible pattern oracle and the pattern->A
+        // delta decoder; the modular replay body is still the measured
+        // streamed-mask one, so this is an honest selector-only probe.
+        const DBITS: usize = 10;
+        let streamed_projected_with_allowance = 2_645_196usize;
+        let selector_allowance = 150_000usize;
+        let mut totals = Vec::new();
+        for &w in &[4usize, 8, 10, 14, 16] {
+            assert_eq!(560 % w, 0);
+            let mut b = super::super::B::new();
+            let f = b.alloc_qubits(w);
+            let g = b.alloc_qubits(w);
+            let delta = b.alloc_qubits(DBITS);
+            let pattern_tmp = b.alloc_qubits(w);
+            let a_tmp = b.alloc_qubits(w);
+            let pattern_hist = b.alloc_qubits(w);
+            for i in 0..w {
+                emit_2adic_by_branch_step_for_test(&mut b, &f, &g, &delta, pattern_tmp[i], a_tmp[i]);
+            }
+            for i in 0..w {
+                b.cx(pattern_tmp[i], pattern_hist[i]);
+            }
+            for i in (0..w).rev() {
+                emit_2adic_by_branch_step_reverse_for_test(&mut b, &f, &g, &delta, pattern_tmp[i], a_tmp[i]);
+            }
+            let oracle_ccx = count_ccx(&b.ops);
+
+            let mut b = super::super::B::new();
+            let pattern = b.alloc_qubits(w);
+            let delta = b.alloc_qubits(DBITS);
+            let a_bits = b.alloc_qubits(w);
+            emit_pattern_delta_decode_window_for_test(&mut b, &pattern, &delta, &a_bits);
+            let decode_ccx = count_ccx(&b.ops);
+
+            let windows = 560 / w;
+            let selector_total = (oracle_ccx + decode_ccx) * windows;
+            let projected = streamed_projected_with_allowance - selector_allowance + selector_total;
+            let gap = projected as isize - 2_700_000isize;
+            eprintln!(
+                "BY lowword selector subwindow w={w}: oracle_ccx={oracle_ccx}, decode_ccx={decode_ccx}, windows={windows}, selector_total={selector_total}, projected={projected}, gap={gap}"
+            );
+            totals.push((w, oracle_ccx, decode_ccx, selector_total, projected, gap));
+        }
+        let best = *totals.iter().min_by_key(|entry| entry.4).unwrap();
+        println!("METRIC scratch600_lowword_selector_best_w={}", best.0);
+        println!("METRIC scratch600_lowword_selector_best_oracle_ccx={}", best.1);
+        println!("METRIC scratch600_lowword_selector_best_decode_ccx={}", best.2);
+        println!("METRIC scratch600_lowword_selector_best_total_ccx={}", best.3);
+        println!("METRIC scratch600_lowword_selector_best_projected_toffoli={}", best.4);
+        println!("METRIC scratch600_lowword_selector_best_gap_to_2700k={}", best.5);
+        for (w, oracle, decode, total, projected, gap) in totals {
+            if w == 8 {
+                println!("METRIC scratch600_lowword_selector_w8_oracle_ccx={oracle}");
+                println!("METRIC scratch600_lowword_selector_w8_decode_ccx={decode}");
+                println!("METRIC scratch600_lowword_selector_w8_total_ccx={total}");
+                println!("METRIC scratch600_lowword_selector_w8_projected_toffoli={projected}");
+                println!("METRIC scratch600_lowword_selector_w8_gap_to_2700k={gap}");
+            }
+            if w == 16 {
+                println!("METRIC scratch600_lowword_selector_w16_oracle_ccx={oracle}");
+                println!("METRIC scratch600_lowword_selector_w16_decode_ccx={decode}");
+                println!("METRIC scratch600_lowword_selector_w16_total_ccx={total}");
+                println!("METRIC scratch600_lowword_selector_w16_projected_toffoli={projected}");
+                println!("METRIC scratch600_lowword_selector_w16_gap_to_2700k={gap}");
+            }
+        }
+        assert!(best.3 > 0, "selector accounting should be nonzero");
+    }
+
+    #[test]
     fn lowword_pattern_and_q_oracle_is_still_cheap_and_clean() {
         // Strengthen the lowword oracle into the consumed-window primitive:
         // sign-extend the W-bit low words into a slightly wider local simulator,

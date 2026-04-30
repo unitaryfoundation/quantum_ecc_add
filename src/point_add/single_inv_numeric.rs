@@ -1617,6 +1617,65 @@ mod tests {
         })
     }
 
+    fn curve_x_support_inverse_phase_has_degree_at_most(
+        n: usize,
+        p: u16,
+        qx: u16,
+        phase_mask: u16,
+        degree: usize,
+    ) -> bool {
+        let masks = monomial_masks_for_curve_phase_test(n, degree);
+        let cols = masks.len();
+        let chunks = (cols + 1 + 63) / 64;
+        let mut quadratic_residue = vec![false; p as usize];
+        for y in 0..p {
+            quadratic_residue[((y as u32 * y as u32) % p as u32) as usize] = true;
+        }
+        let mut rows = Vec::new();
+        for x in 0..p {
+            if x == qx {
+                continue;
+            }
+            let x2 = mul_mod_u16_for_phase_test(x, x, p);
+            let rhs = add_mod_u16_for_phase_test(mul_mod_u16_for_phase_test(x2, x, p), 7, p);
+            if !quadratic_residue[rhs as usize] {
+                continue;
+            }
+            let denom = sub_mod_u16_for_phase_test(x, qx, p);
+            let inv = inv_mod_u16_for_phase_test(denom, p);
+            let mut row = vec![0u64; chunks];
+            let idx = x as u32;
+            for (col, &m) in masks.iter().enumerate() {
+                if (idx & m) == m {
+                    row[col / 64] |= 1u64 << (col % 64);
+                }
+            }
+            if ((inv & phase_mask).count_ones() & 1) != 0 {
+                row[cols / 64] |= 1u64 << (cols % 64);
+            }
+            rows.push(row);
+        }
+        let mut rows_a = rows.clone();
+        for row in &mut rows_a {
+            row[cols / 64] &= !(1u64 << (cols % 64));
+        }
+        let rank_a = gf2_rank_bitrows_for_curve_phase_test(&mut rows_a, cols);
+        let rank_aug = gf2_rank_bitrows_for_curve_phase_test(&mut rows, cols + 1);
+        rank_a == rank_aug
+    }
+
+    fn curve_x_support_inverse_phase_min_degree(
+        n: usize,
+        p: u16,
+        qx: u16,
+        phase_mask: u16,
+        max_degree: usize,
+    ) -> Option<usize> {
+        (0..=max_degree).find(|&d| {
+            curve_x_support_inverse_phase_has_degree_at_most(n, p, qx, phase_mask, d)
+        })
+    }
+
     fn pencil_slope_root_choice_anf_stats(n: usize, p: u16, qx: u16, qy: u16, phase_mask: u16) -> (usize, usize, usize) {
         let size = 1usize << n;
         let mut anf = vec![0u8; size];
@@ -1656,6 +1715,41 @@ mod tests {
             .max()
             .unwrap_or(0);
         (degree, density, supported_slopes)
+    }
+
+    #[test]
+    fn curve_x_support_does_not_make_inverse_low_degree() {
+        // A narrower version of the curve-support escape hatch: the affine
+        // denominator dx = Px-Qx is not uniformly arbitrary; Px is an
+        // x-coordinate occurring on y^2=x^3+7.  If inversion on this half-sized
+        // x-support had a very low-degree phase extension, one could imagine
+        // measuring quotient/inverse garbage and kickmixing it from x alone.
+        // Exhaustive toy interpolation says no: the minimum degree follows the
+        // coding-theory threshold for a ~2^(n-1) support set, already n/2 at
+        // n=14.  This closes the "curve x-set makes reciprocal easy" variant
+        // independently of the full (x,y) point-add cleanup tests.
+        let cases = [
+            (8usize, 251u16, 0b1010_0101u16, 4usize),
+            (10usize, 1021u16, 0b10_1001_0101u16, 5usize),
+            (12usize, 4093u16, 0b1010_0101_0101u16, 6usize),
+            (14usize, 16381u16, 0b10_1010_0101_0101u16, 7usize),
+        ];
+        let mut last = 0usize;
+        for &(n, p, mask, expected) in &cases {
+            let (qx, qy) = first_curve_point_u16_for_phase_test(p);
+            let min_degree = curve_x_support_inverse_phase_min_degree(n, p, qx, mask, expected)
+                .expect("curve-x inverse phase should interpolate at expected threshold");
+            eprintln!(
+                "Curve-x-support inverse phase: n={n}, p={p}, q=({qx},{qy}), min_degree={min_degree}"
+            );
+            if n == 14 {
+                println!("METRIC curve_x_support_inv_min_degree_n14={min_degree}");
+            }
+            assert!(min_degree >= last);
+            assert_eq!(min_degree, expected);
+            last = min_degree;
+        }
+        assert!(last >= 7);
     }
 
     #[test]

@@ -15,6 +15,86 @@ use super::{
 use super::{B, QubitId};
 use crate::circuit::OperationType;
 
+enum ShiftUndoForCost {
+    Doubles(usize),
+    Chunk(usize, Vec<QubitId>, QubitId, QubitId),
+}
+
+fn shift_tmp_up_for_sparse_const_cost(
+    b: &mut B,
+    tmp: &[QubitId],
+    p: alloy_primitives::U256,
+    mut delta: usize,
+    undo: &mut Vec<ShiftUndoForCost>,
+) {
+    while delta >= 22 {
+        let (spill, flag_inv, ovf) = super::mod_shift_left_by_k(b, tmp, p, 22);
+        undo.push(ShiftUndoForCost::Chunk(22, spill, flag_inv, ovf));
+        delta -= 22;
+    }
+    if delta >= 12 {
+        let (spill, flag_inv, ovf) = super::mod_shift_left_by_k(b, tmp, p, delta);
+        undo.push(ShiftUndoForCost::Chunk(delta, spill, flag_inv, ovf));
+    } else if delta > 0 {
+        for _ in 0..delta {
+            mod_double_inplace_fast(b, tmp, p);
+        }
+        undo.push(ShiftUndoForCost::Doubles(delta));
+    }
+}
+
+fn undo_sparse_const_shifts_for_cost(
+    b: &mut B,
+    tmp: &[QubitId],
+    p: alloy_primitives::U256,
+    undo: Vec<ShiftUndoForCost>,
+) {
+    for item in undo.into_iter().rev() {
+        match item {
+            ShiftUndoForCost::Doubles(k) => {
+                for _ in 0..k {
+                    mod_halve_inplace_fast(b, tmp, p);
+                }
+            }
+            ShiftUndoForCost::Chunk(k, spill, flag_inv, ovf) => {
+                super::mod_shift_right_by_k(b, tmp, p, k, spill, flag_inv, ovf);
+            }
+        }
+    }
+}
+
+fn mul_by_const_acc_chunked_shifts_for_cost(
+    b: &mut B,
+    x: &[QubitId],
+    c: alloy_primitives::U256,
+    acc: &[QubitId],
+    p: alloy_primitives::U256,
+) {
+    let n = x.len();
+    let tmp = b.alloc_qubits(n);
+    for i in 0..n {
+        b.cx(x[i], tmp[i]);
+    }
+    let mut positions = Vec::new();
+    for i in 0..256 {
+        if super::bit(c, i) {
+            positions.push(i);
+        }
+    }
+    let mut undo = Vec::new();
+    let mut cur = 0usize;
+    for pos in positions {
+        shift_tmp_up_for_sparse_const_cost(b, &tmp, p, pos - cur, &mut undo);
+        cur = pos;
+        mod_add_qq(b, acc, &tmp, p);
+    }
+    undo_sparse_const_shifts_for_cost(b, &tmp, p, undo);
+    for i in 0..n {
+        b.cx(x[i], tmp[i]);
+    }
+    b.free_vec(&tmp);
+}
+
 fn count_ccx(ops: &[crate::circuit::Op]) -> usize {
     ops.iter()
         .filter(|o| matches!(o.kind, OperationType::CCX | OperationType::CCZ))
@@ -152,6 +232,60 @@ fn cost_halve_double_n256() {
     let double_ccx = count_ccx(&b.ops[mid..end]);
     eprintln!("mod_halve_inplace_fast(n=256): {} CCX", halve_ccx);
     eprintln!("mod_double_inplace_fast(n=256): {} CCX", double_ccx);
+}
+
+#[test]
+fn chunked_shift_prescaler_reopens_small_scale_absorption_win() {
+    // Scale absorption deletes a ~iters-long halve/double correction loop if we
+    // initialize Kaliski with 2^iters*x.  The constants are sparse for secp256k1,
+    // e.g. 2^404 = 2^148(2^32+977), so try a custom constant multiplier that
+    // jumps between sparse set-bit positions with the Solinas k-bit shifter
+    // instead of walking through every intermediate double.  This beats the old
+    // mixed prescaler locally and is just below the correction-loop cost for the
+    // current pair1/pair2 iteration counts, making scale absorption a small but
+    // real env-gated integration candidate.
+    use super::*;
+    let p = SECP256K1_P;
+    let x = B::new();
+    drop(x);
+    for &(iters, label) in &[(404usize, "pair1"), (401usize, "pair2")] {
+        let scale = pow_mod_2_k(p, iters);
+        let mut b = B::new();
+        let src = b.alloc_qubits(N);
+        let acc = b.alloc_qubits(N);
+        let start = b.ops.len();
+        mul_by_const_acc_exact_adds_fast_shifts(&mut b, &src, scale, &acc, p, false);
+        let mixed_ccx = count_ccx(&b.ops[start..]);
+
+        let mut b = B::new();
+        let src = b.alloc_qubits(N);
+        let acc = b.alloc_qubits(N);
+        let start = b.ops.len();
+        mul_by_const_acc_chunked_shifts_for_cost(&mut b, &src, scale, &acc, p);
+        let chunked_ccx = count_ccx(&b.ops[start..]);
+
+        let mut b = B::new();
+        let v = b.alloc_qubits(N);
+        let start = b.ops.len();
+        for _ in 0..iters {
+            if label == "pair1" {
+                mod_halve_inplace_fast(&mut b, &v, p);
+            } else {
+                mod_double_inplace_fast(&mut b, &v, p);
+            }
+        }
+        let correction_loop_ccx = count_ccx(&b.ops[start..]);
+        let projected_delta = 2isize * chunked_ccx as isize - correction_loop_ccx as isize;
+        eprintln!(
+            "{label} scale prescaler: mixed_ccx={mixed_ccx}, chunked_ccx={chunked_ccx}, correction_loop_ccx={correction_loop_ccx}, projected_delta={projected_delta}"
+        );
+        println!("METRIC scale_absorb_{label}_mixed_prescale_ccx={mixed_ccx}");
+        println!("METRIC scale_absorb_{label}_chunked_prescale_ccx={chunked_ccx}");
+        println!("METRIC scale_absorb_{label}_correction_loop_ccx={correction_loop_ccx}");
+        println!("METRIC scale_absorb_{label}_chunked_projected_delta={projected_delta}");
+        assert!(chunked_ccx < mixed_ccx / 2, "chunked sparse shifts should strongly improve the local prescaler");
+        assert!(projected_delta < 0, "chunked compute+uncompute should beat the deleted correction loop locally");
+    }
 }
 
 #[test]

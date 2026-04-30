@@ -36,8 +36,8 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         Candidate {
             name: "full_ratio_by_selector_state",
             scratch_bits: 560,
-            charged_toffoli: Some(7_307_490),
-            blocker: "state fits, but A-step ratio inverse proxy is multi-million",
+            charged_toffoli: Some(9_952_686),
+            blocker: "state fits, but A-step ratio inverse proxy projects to 9952686 total",
         },
         Candidate {
             name: "compact_by_denpair_plus_sidecar",
@@ -50,6 +50,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             scratch_bits: 564,
             charged_toffoli: None,
             blocker: "raw stream fits only before boundary/rank/live-parser cost is charged",
+        },
+        Candidate {
+            name: "plusminus_scaled_slack_solinas_model_unbuilt",
+            scratch_bits: 527,
+            charged_toffoli: None,
+            blocker: "model projects max 2230850 but lacks phase-clean slack packing and variable-S Solinas circuit",
         },
         Candidate {
             name: "centered_euclid_raw_q_stream_without_parser",
@@ -93,6 +99,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let plusminus_raw_scratch = 564usize;
     let plusminus_unary_scratch_p99 = 640usize;
     let plusminus_parser_over_strict = plusminus_unary_scratch_p99 - STRICT_SCRATCH;
+    let plusminus_scaled_slack_scratch_max = 527usize;
+    let plusminus_scaled_solinas_projected_max = 2_230_850usize;
+    let plusminus_scaled_solinas_gap_max = plusminus_scaled_solinas_projected_max as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let halfgcd_matrix_only = 524usize;
     let halfgcd_matrix_tail_raw = 689usize;
     let halfgcd_tail_over_google = halfgcd_matrix_tail_raw - GOOGLE_LOW_QUBIT_SCRATCH;
@@ -124,6 +133,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_plusminus_raw_scratch_bits={plusminus_raw_scratch}");
     println!("METRIC scratch600_plusminus_unary_scratch_p99={plusminus_unary_scratch_p99}");
     println!("METRIC scratch600_plusminus_parser_over_strict_bits={plusminus_parser_over_strict}");
+    println!("METRIC scratch600_plusminus_scaled_slack_scratch_max={plusminus_scaled_slack_scratch_max}");
+    println!("METRIC scratch600_plusminus_scaled_solinas_projected_max={plusminus_scaled_solinas_projected_max}");
+    println!("METRIC scratch600_plusminus_scaled_solinas_gap_max_to_2700k={plusminus_scaled_solinas_gap_max}");
     println!("METRIC scratch600_halfgcd_matrix_only_bits={halfgcd_matrix_only}");
     println!("METRIC scratch600_halfgcd_matrix_tail_raw_bits={halfgcd_matrix_tail_raw}");
     println!("METRIC scratch600_halfgcd_tail_over_google_bits={halfgcd_tail_over_google}");

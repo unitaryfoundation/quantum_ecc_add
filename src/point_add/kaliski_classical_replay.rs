@@ -562,6 +562,160 @@ mod tests {
         println!("TOTAL CONFLICTS: {}", conflicts);
     }
 
+    fn branch_controls_from_snapshot(u: U256, v_w: U256, f: u8) -> (u8, u8, u8, u8) {
+        let mut f_after_zero = f;
+        let mut m_i = 0u8;
+        if f_after_zero == 1 && v_w == U256::ZERO {
+            m_i ^= 1;
+            f_after_zero ^= m_i;
+        }
+
+        let u0 = (u.as_limbs()[0] & 1) as u8;
+        let v0 = (v_w.as_limbs()[0] & 1) as u8;
+        let mut a_f = 0u8;
+        if f_after_zero == 1 && u0 == 0 {
+            a_f ^= 1;
+        }
+        if f_after_zero == 1 && u0 == 1 && v0 == 0 {
+            m_i ^= 1;
+        }
+        let b_f = a_f ^ m_i;
+        let gt = if u > v_w { 1u8 } else { 0 };
+        let delta = f_after_zero & gt & (1 ^ b_f);
+        a_f ^= delta;
+        m_i ^= delta;
+        let add_f_step4 = f_after_zero & (1 ^ b_f);
+        (m_i, a_f, add_f_step4, f_after_zero)
+    }
+
+    fn a_control_from_snapshot(u: U256, v_w: U256, f: u8) -> u8 {
+        branch_controls_from_snapshot(u, v_w, f).1
+    }
+
+    #[test]
+    fn persistent_orientation_cswap_savings_have_selector_caveat() {
+        // First-principles check of the "batch consecutive Kaliski swaps" idea.
+        // Current Kaliski emits pre- and post-cswaps whenever a_i=1.  If we
+        // carried a logical orientation bit instead, physical swaps are needed
+        // only when the desired orientation toggles.  The a_i stream is indeed
+        // correlated enough to cut cswap *execution* roughly in half, but this
+        // is only a candidate if all following add/sub/double/comparator logic
+        // can be cheaply selected by the orientation bit.  This test records
+        // the upper bound before paying that selector cost.
+        let p = SECP256K1_P;
+        let samples = 2048usize;
+        let iters = 404usize;
+        let mut a_ones = 0usize;
+        let mut transitions = 0usize;
+        let mut total = 0usize;
+        for seed in 0..samples as u64 {
+            let v_in = random_element(seed + 1);
+            let (_m_hist, snaps) = kaliski_run(v_in, p, iters);
+            let mut prev = 0u8;
+            for i in 0..iters {
+                let (u, v_w, _r, _s, f) = snaps[i];
+                let a = a_control_from_snapshot(u, v_w, f);
+                a_ones += a as usize;
+                if i == 0 {
+                    transitions += a as usize;
+                } else {
+                    transitions += (a ^ prev) as usize;
+                }
+                prev = a;
+                total += 1;
+            }
+            transitions += prev as usize; // restore canonical orientation after the pass
+        }
+        let a_frac = a_ones as f64 / total as f64;
+        let event_frac = transitions as f64 / total as f64;
+        let current_cswap_word_events = 2.0 * a_ones as f64;
+        let persistent_cswap_word_events = transitions as f64;
+        let ratio = persistent_cswap_word_events / current_cswap_word_events;
+        eprintln!(
+            "Kaliski persistent orientation upper bound: a_frac={a_frac:.6}, event_frac={event_frac:.6}, cswap_event_ratio={ratio:.6}"
+        );
+        println!("METRIC kaliski_persistent_orientation_a_frac={a_frac:.6}");
+        println!("METRIC kaliski_persistent_orientation_event_frac={event_frac:.6}");
+        println!("METRIC kaliski_persistent_orientation_cswap_ratio={ratio:.6}");
+        assert!(ratio < 0.75);
+        assert!(event_frac > 0.20);
+    }
+
+    #[test]
+    fn transition_oriented_kaliski_matches_canonical_classically() {
+        // Classical skeleton for a possible Kaliski persistent-orientation
+        // circuit.  Keep the physical registers in the orientation used by
+        // the previous step's pre-swap.  Before the next update, swap only if
+        // the newly desired pre-swap orientation differs.  This verifies the
+        // transition-count model exactly at the algorithm level; the remaining
+        // quantum question is the extra cost of computing branch predicates in
+        // a possibly-swapped frame.
+        let p = SECP256K1_P;
+        let samples = 200usize;
+        let iters = 404usize;
+        let mut total_swaps = 0usize;
+        let mut canonical_swaps = 0usize;
+        for seed in 0..samples as u64 {
+            let v_in = random_element(seed + 10_000);
+            let mut cu = p;
+            let mut cv = v_in;
+            let mut cr = U256::ZERO;
+            let mut cs = U256::from(1u64);
+            let mut cf = 1u8;
+
+            let mut pu = p;
+            let mut pv = v_in;
+            let mut pr = U256::ZERO;
+            let mut ps = U256::from(1u64);
+            let mut of = 1u8;
+            let mut orient = 0u8;
+
+            for _ in 0..iters {
+                let (lu, lv, lr, ls) = if orient == 0 {
+                    (pu, pv, pr, ps)
+                } else {
+                    (pv, pu, ps, pr)
+                };
+                assert_eq!((lu, lv, lr, ls, of), (cu, cv, cr, cs, cf));
+
+                let (m_i, a, add_f, f_after_zero) = branch_controls_from_snapshot(lu, lv, of);
+                let m_ref = kaliski_iter_classical(&mut cu, &mut cv, &mut cr, &mut cs, &mut cf, p);
+                assert_eq!(m_i, m_ref);
+                of = f_after_zero;
+                canonical_swaps += 2 * a as usize;
+
+                if orient != a {
+                    core::mem::swap(&mut pu, &mut pv);
+                    core::mem::swap(&mut pr, &mut ps);
+                    orient ^= 1;
+                    total_swaps += 1;
+                }
+                if add_f == 1 {
+                    pv = pv.wrapping_sub(pu);
+                    let sum = ps.wrapping_add(pr);
+                    ps = if sum < ps || sum >= p { sum } else { sum };
+                }
+                pv >>= 1;
+                let r2 = pr.wrapping_add(pr);
+                pr = if r2 >= p || r2 < pr { r2.wrapping_sub(p) } else { r2 };
+            }
+            if orient != 0 {
+                core::mem::swap(&mut pu, &mut pv);
+                core::mem::swap(&mut pr, &mut ps);
+                orient = 0;
+                total_swaps += 1;
+            }
+            assert_eq!(orient, 0);
+            assert_eq!((pu, pv, pr, ps, of), (cu, cv, cr, cs, cf));
+        }
+        let ratio = total_swaps as f64 / canonical_swaps.max(1) as f64;
+        eprintln!(
+            "Transition-oriented Kaliski classical swap-word ratio: {total_swaps}/{canonical_swaps} = {ratio:.6}"
+        );
+        println!("METRIC kaliski_transition_orientation_swap_ratio={ratio:.6}");
+        assert!(ratio < 0.35);
+    }
+
     #[test]
     fn verify_minimal_formula() {
         // Check: m_i = f AND u[0] AND (NOT v_w[0] OR gt)

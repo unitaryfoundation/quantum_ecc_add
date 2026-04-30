@@ -4148,6 +4148,46 @@ mod tests {
     }
 
     #[test]
+    fn plusminus_physical_shift_step_scaling_exposes_quadratic_tax() {
+        // Cost-only scaling check for the currently wired variable shifts.  The
+        // optimistic budget counted shift work per unary-one bit, but this
+        // physical skeleton emits one controlled single-bit shift for every
+        // possible history bit.  If this grows ~W^2 per step, production needs
+        // a relabel/offset representation before 257-bit integration.
+        let mut rows = Vec::new();
+        for &w in &[8usize, 16, 32, 64] {
+            let mut b = super::super::B::new();
+            let u = b.alloc_qubits(w);
+            let v = b.alloc_qubits(w);
+            let cu = b.alloc_qubits(w);
+            let cv = b.alloc_qubits(w);
+            let active = b.alloc_qubits(w + 1);
+            let hist = b.alloc_qubits(w);
+            let spill = b.alloc_qubit();
+            let flag = b.alloc_qubit();
+            let one = b.alloc_qubit();
+            let start = b.ops.len();
+            emit_plusminus_inplace_step_forward_konly_for_test(&mut b, &u, &v, &cu, &cv, &active, &hist, spill, flag, one);
+            let ccx = local_count_ccx_for_plusminus_cost(&b.ops[start..]);
+            rows.push((w, ccx, b.peak_qubits));
+        }
+        for (w, ccx, peak) in &rows {
+            eprintln!("plus-minus physical k-only forward scaling: w={w}, ccx={ccx}, peak={peak}");
+        }
+        let w8 = rows[0].1;
+        let w16 = rows[1].1;
+        let w32 = rows[2].1;
+        let w64 = rows[3].1;
+        let extrap257 = ((w64 as f64) * (257.0f64 / 64.0).powi(2)).round() as usize;
+        println!("METRIC plusminus_physical_shift_w8_forward_ccx={w8}");
+        println!("METRIC plusminus_physical_shift_w16_forward_ccx={w16}");
+        println!("METRIC plusminus_physical_shift_w32_forward_ccx={w32}");
+        println!("METRIC plusminus_physical_shift_w64_forward_ccx={w64}");
+        println!("METRIC plusminus_physical_shift_extrap257_forward_ccx={extrap257}");
+        assert!(w64 > 3 * w32, "current physical shift unexpectedly stopped looking quadratic");
+    }
+
+    #[test]
     fn plusminus_active_aware_step_noop_and_roundtrip_is_clean() {
         // Fixed-bound loop smoke test: u==v must be a no-op with an all-zero
         // history word, while u!=v must match the ordinary k-only step.  The

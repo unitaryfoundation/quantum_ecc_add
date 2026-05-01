@@ -5181,6 +5181,33 @@ mod tests {
     }
 
     #[test]
+    fn partial_prefix_one_div_is_too_expensive_for_strategy_e_escape() {
+        // After the two-denominator ledger, the obvious escape is to use the
+        // one-DIV partial-prefix primitive in a slope-coordinate/Strategy-E
+        // point-add map.  That route still needs an in-place variable multiply
+        // to convert the carried slope to affine y.  Even granting a future
+        // schoolbook-like product-clean multiply, the partial-prefix DIV body is
+        // too expensive for the Strategy-E budget.
+        let partial_prefix_one_div_total = 2_533_964usize;
+        let one_div_scaffold_from_by_model = 642_716usize;
+        let partial_prefix_div_body = partial_prefix_one_div_total - one_div_scaffold_from_by_model;
+        let strategy_e_non_div_scaffold = 942_750usize;
+        let known_product_clean = 1_145_760usize;
+        let hypothetical_schoolbook_product_clean = 180_000usize;
+        let current_product_total = strategy_e_non_div_scaffold + partial_prefix_div_body + known_product_clean;
+        let hypothetical_product_total = strategy_e_non_div_scaffold + partial_prefix_div_body + hypothetical_schoolbook_product_clean;
+        let current_gap = current_product_total as isize - 2_700_000;
+        let hypothetical_gap = hypothetical_product_total as isize - 2_700_000;
+        println!("METRIC by_partial_prefix_strategy_e_div_body_ccx={partial_prefix_div_body}");
+        println!("METRIC by_partial_prefix_strategy_e_current_product_gap_ccx={current_gap}");
+        println!("METRIC by_partial_prefix_strategy_e_hyp_product_gap_ccx={hypothetical_gap}");
+        eprintln!(
+            "partial-prefix one-DIV in Strategy E: div_body={partial_prefix_div_body}, current_total={current_product_total} gap={current_gap}, hypothetical_total={hypothetical_product_total} gap={hypothetical_gap}"
+        );
+        assert!(hypothetical_gap > 0, "partial-prefix DIV plus schoolbook product would make Strategy E viable; revisit");
+    }
+
+    #[test]
     fn partial_mask_controlled_qoffset_linear_tradeoff_just_misses_600q_target() {
         // First-order model after the masked-borrow primitive: full mask gives
         // good gates but 766q scratch with compressed history; no mask gives

@@ -8242,6 +8242,91 @@ mod tests {
         assert!(restoring_current_4n_gap > 0 && compare_masked_current_5n_gap > 0, "current qbit primitives unexpectedly fit");
     }
 
+    fn emit_masked_add_for_centered_restoring_test(
+        b: &mut super::super::B,
+        acc: &[super::super::QubitId],
+        a: &[super::super::QubitId],
+        ctrl: super::super::QubitId,
+    ) {
+        assert_eq!(acc.len(), a.len());
+        let tmp = b.alloc_qubits(a.len());
+        for i in 0..a.len() {
+            b.ccx(ctrl, a[i], tmp[i]);
+        }
+        super::super::add_nbit_qq_fast(b, &tmp, acc);
+        for i in (0..a.len()).rev() {
+            b.ccx(ctrl, a[i], tmp[i]);
+        }
+        b.free_vec(&tmp);
+    }
+
+    fn emit_trial_restoring_subtract_for_centered_test(
+        b: &mut super::super::B,
+        u: &[super::super::QubitId],
+        v: &[super::super::QubitId],
+        q_success: super::super::QubitId,
+    ) {
+        assert_eq!(u.len(), v.len());
+        let top_u = b.alloc_qubit();
+        let top_v = b.alloc_qubit();
+        let borrow = b.alloc_qubit();
+        let mut u_ext = u.to_vec();
+        u_ext.push(top_u);
+        let mut v_ext = v.to_vec();
+        v_ext.push(top_v);
+        super::super::sub_nbit_qq_fast(b, &v_ext, &u_ext);
+        b.cx(top_u, borrow);
+        b.x(borrow);
+        b.cx(borrow, q_success);
+        b.x(borrow);
+        emit_masked_add_for_centered_restoring_test(b, &u_ext, &v_ext, borrow);
+        b.x(q_success);
+        b.cx(q_success, borrow);
+        b.x(q_success);
+        b.free(borrow);
+        b.free(top_v);
+        b.free(top_u);
+    }
+
+    #[test]
+    fn centered_restoring_subtract_current_circuit_confirms_over_budget() {
+        // Concrete cost checkpoint for the q-bit primitive.  The obvious trial
+        // subtract + masked add-back implementation uses only existing clean
+        // adders, but its cost scales near 4n per quotient bit.  That confirms
+        // the budget ledger above: current primitives miss relaxed 3M unless a
+        // fused borrow-exposing subtract below ~2.5n exists.
+        let cost_for = |n: usize| -> (usize, u32) {
+            let mut b = super::super::B::new();
+            let u = b.alloc_qubits(n);
+            let v = b.alloc_qubits(n);
+            let q = b.alloc_qubit();
+            emit_trial_restoring_subtract_for_centered_test(&mut b, &u, &v, q);
+            (local_count_ccx_for_plusminus_cost(&b.ops), b.peak_qubits)
+        };
+        let (ccx32, peak32) = cost_for(32);
+        let (ccx64, peak64) = cost_for(64);
+        let per_n64 = ccx64 as f64 / 64.0;
+
+        let payload_p99 = 337usize;
+        let count_p99 = 119usize;
+        let scaffold_after_div = 642_716isize;
+        let coeff_replay_per_div = payload_p99 * 587usize;
+        let barrel_and_scan = count_p99 * (256usize * 8usize + 256usize);
+        let per_payload_bit_256 = ((per_n64 * 256.0).ceil()) as usize;
+        let oneway = payload_p99 * per_payload_bit_256 + barrel_and_scan;
+        let one_div = coeff_replay_per_div + 2 * oneway;
+        let gap = scaffold_after_div + 2 * one_div as isize - 3_000_000isize;
+        println!("METRIC centered_restoring_circuit_ccx32={ccx32}");
+        println!("METRIC centered_restoring_circuit_peak32={peak32}");
+        println!("METRIC centered_restoring_circuit_ccx64={ccx64}");
+        println!("METRIC centered_restoring_circuit_peak64={peak64}");
+        println!("METRIC centered_restoring_circuit_per_n64={per_n64:.3}");
+        println!("METRIC centered_restoring_circuit_gap_to_3m_ccx={gap}");
+        eprintln!("Centered restoring subtract circuit: ccx32={ccx32}, peak32={peak32}, ccx64={ccx64}, peak64={peak64}, per_n64={per_n64:.2}, scaled_gap={gap}");
+        assert!(per_n64 > 3.5, "current restoring subtract is near the fused target; revisit centered extractor");
+        assert!(gap > 0, "current restoring subtract circuit fits relaxed 3M; prototype full extractor");
+    }
+
     #[test]
     fn euclid_quotient_stream_entropy_also_exceeds_scratch600() {
         // Follow-up to the raw-payload quotient-stream DIV test.  The tempting

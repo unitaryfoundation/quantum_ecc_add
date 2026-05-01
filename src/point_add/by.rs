@@ -5295,6 +5295,151 @@ mod tests {
         assert!(product_clean_budget_after_partial_prefix < 180_000, "partial-prefix Strategy E can afford a schoolbook-like product-clean multiply under 3M");
     }
 
+    fn secp_curve_for_strategy_e_share_test() -> crate::weierstrass_elliptic_curve::WeierstrassEllipticCurve {
+        crate::weierstrass_elliptic_curve::WeierstrassEllipticCurve {
+            modulus: SECP256K1_P,
+            a: U256::from(0),
+            b: U256::from(7),
+            gx: U256::from_str_radix(
+                "79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798",
+                16,
+            ).unwrap(),
+            gy: U256::from_str_radix(
+                "483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8",
+                16,
+            ).unwrap(),
+            order: U256::from_str_radix(
+                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141",
+                16,
+            ).unwrap(),
+        }
+    }
+
+    fn rand_scalar_for_strategy_e_share_test(rng: &mut u64, order: U256) -> U256 {
+        let mut limbs = [0u64; 4];
+        for limb in &mut limbs {
+            *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *limb = *rng;
+        }
+        let x = U256::from_limbs(limbs) % order;
+        if x.is_zero() { U256::from(1u64) } else { x }
+    }
+
+    fn by_branch_cases_for_strategy_e_share_test(g0: U256, p: U256, iters: usize) -> Vec<u8> {
+        let mut delta: i64 = 1;
+        let mut f = SInt::from_u(p);
+        let mut g = SInt::from_u(g0);
+        let mut out = Vec::with_capacity(iters);
+        for _ in 0..iters {
+            let g_odd = g.bit0();
+            if delta > 0 && g_odd {
+                out.push(2); // A
+                let nf = g;
+                let ng = SInt::sub(g, f).shr1_even();
+                delta = 1 - delta;
+                f = nf;
+                g = ng;
+            } else if g_odd {
+                out.push(1); // B
+                let ng = SInt::add(g, f).shr1_even();
+                delta = 1 + delta;
+                g = ng;
+            } else {
+                out.push(0); // C
+                let ng = g.shr1_even();
+                delta = 1 + delta;
+                g = ng;
+            }
+        }
+        out
+    }
+
+    fn mutual_information_millibits_for_strategy_e_share_test<const N: usize>(counts: [[usize; N]; N]) -> f64 {
+        let total: usize = counts.iter().flatten().sum();
+        if total == 0 { return 0.0; }
+        let mut rows = [0usize; N];
+        let mut cols = [0usize; N];
+        for i in 0..N {
+            for j in 0..N {
+                rows[i] += counts[i][j];
+                cols[j] += counts[i][j];
+            }
+        }
+        let total_f = total as f64;
+        let mut mi = 0.0f64;
+        for i in 0..N {
+            for j in 0..N {
+                let c = counts[i][j];
+                if c == 0 { continue; }
+                let pxy = c as f64 / total_f;
+                let px = rows[i] as f64 / total_f;
+                let py = cols[j] as f64 / total_f;
+                mi += pxy * (pxy / (px * py)).log2();
+            }
+        }
+        1000.0 * mi
+    }
+
+    #[test]
+    fn strategy_e_product_denominator_controls_do_not_share_pair1_branch_stream() {
+        // If Strategy E could derive the product-clean denominator controls
+        // from the slope-DIV branch stream, the "second denominator" risk above
+        // might be avoidable.  A direct secp sample shows no such simple sharing:
+        // BY branch cases for dx and for c=Rx-Qx are essentially independent.
+        // This does not prove every algebra impossible, but it blocks counting
+        // branch-control reuse without a new concrete invariant.
+        let curve = secp_curve_for_strategy_e_share_test();
+        let p = SECP256K1_P;
+        let iters = 576usize;
+        let target_samples = 256usize;
+        let mut rng = 0x57aa_7e61_5bad_e001u64;
+        let mut samples = 0usize;
+        let mut odd_counts = [[0usize; 2]; 2];
+        let mut case_counts = [[0usize; 3]; 3];
+        let mut odd_match = 0usize;
+        let mut case_match = 0usize;
+        while samples < target_samples {
+            let k1 = rand_scalar_for_strategy_e_share_test(&mut rng, curve.order);
+            let k2 = rand_scalar_for_strategy_e_share_test(&mut rng, curve.order);
+            let (px, py) = curve.mul(curve.gx, curve.gy, k1);
+            let (qx, qy) = curve.mul(curve.gx, curve.gy, k2);
+            if (px.is_zero() && py.is_zero()) || (qx.is_zero() && qy.is_zero()) || px == qx {
+                continue;
+            }
+            let (rx, ry) = curve.add(px, py, qx, qy);
+            if rx.is_zero() && ry.is_zero() { continue; }
+            let dx = subm(px, qx, p);
+            let prod_den = subm(rx, qx, p);
+            if dx.is_zero() || prod_den.is_zero() { continue; }
+            let a = by_branch_cases_for_strategy_e_share_test(dx, p, iters);
+            let b = by_branch_cases_for_strategy_e_share_test(prod_den, p, iters);
+            for i in 0..iters {
+                let oa = (a[i] != 0) as usize;
+                let ob = (b[i] != 0) as usize;
+                odd_counts[oa][ob] += 1;
+                case_counts[a[i] as usize][b[i] as usize] += 1;
+                if oa == ob { odd_match += 1; }
+                if a[i] == b[i] { case_match += 1; }
+            }
+            samples += 1;
+        }
+        let total = samples * iters;
+        let odd_match_ppm = odd_match * 1_000_000usize / total;
+        let case_match_ppm = case_match * 1_000_000usize / total;
+        let odd_mi_millibits = mutual_information_millibits_for_strategy_e_share_test::<2>(odd_counts);
+        let case_mi_millibits = mutual_information_millibits_for_strategy_e_share_test::<3>(case_counts);
+        println!("METRIC strategy_e_branch_share_samples={samples}");
+        println!("METRIC strategy_e_branch_odd_match_ppm={odd_match_ppm}");
+        println!("METRIC strategy_e_branch_case_match_ppm={case_match_ppm}");
+        println!("METRIC strategy_e_branch_odd_mi_millibits={odd_mi_millibits:.3}");
+        println!("METRIC strategy_e_branch_case_mi_millibits={case_mi_millibits:.3}");
+        eprintln!(
+            "Strategy E branch sharing probe: samples={samples}, odd_match_ppm={odd_match_ppm}, case_match_ppm={case_match_ppm}, odd_mi_millibits={odd_mi_millibits:.3}, case_mi_millibits={case_mi_millibits:.3}, odd_counts={odd_counts:?}, case_counts={case_counts:?}"
+        );
+        assert!(odd_mi_millibits < 10.0, "pair1/product odd controls show exploitable correlation; investigate sharing");
+        assert!(case_mi_millibits < 10.0, "pair1/product branch cases show exploitable correlation; investigate sharing");
+    }
+
     #[test]
     fn partial_mask_controlled_qoffset_linear_tradeoff_just_misses_600q_target() {
         // First-order model after the masked-borrow primitive: full mask gives

@@ -17364,6 +17364,237 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_restoring_final_coeff_decoder_stored_alignment_needs_variable_metadata() {
+        // The coefficient decoder's scan-free lower bound fits the average
+        // target.  A natural repair is to keep the forward alignment and
+        // low/high-candidate branch metadata, then replay the decoder with a
+        // stored-alignment barrel instead of rescanning coefficient widths.
+        // Fixed per-step metadata is much larger than the scratch budget, but a
+        // variable payload lower bound fits.  That moves the blocker from the
+        // decoder arithmetic to exact phase-clean packing/parsing of the
+        // alignment and branch stream.
+        const TARGET: f64 = 2_700_000.0;
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0xd1ce_c0ef_a119_0001u64;
+        let n = 256usize;
+        let exact_barrel_bits = 8usize;
+        let mut stored_select1 = Vec::with_capacity(samples);
+        let mut stored_branch_select1 = Vec::with_capacity(samples);
+        let mut fixed_scratches = Vec::with_capacity(samples);
+        let mut variable_scratches = Vec::with_capacity(samples);
+        let mut align_pop_barrels = Vec::with_capacity(samples);
+        let mut branch_selects = Vec::with_capacity(samples);
+        let mut branch_counts = Vec::with_capacity(samples);
+        let mut first64_stored = 0isize;
+        let mut first64_stored_branch = 0isize;
+
+        for sample_idx in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(p));
+            let mut v = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(x));
+            let mut coeff_u = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut coeff_v = smag_for_halfgcd_test(false, U512::from(1u64));
+            let (mut digit_payload, mut digit_width_cost, mut count) =
+                (0usize, 0usize, 0usize);
+            let mut coeff_width_cost = 0usize;
+            let mut decoder_digit = 0usize;
+            let mut align_pop_barrel = 0usize;
+            let mut align_variable_bits = 0usize;
+            let mut branch_select = 0usize;
+            let mut ambiguous_branches = 0usize;
+
+            while !v.mag.is_zero() {
+                let public_bound = direct_centered_public_width_bound_for_step(n, count);
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let q_direct = adjusted / v.mag;
+                let signed_digits =
+                    nonrestoring_floor_restoring_final_digits_for_centered_test(adjusted, v.mag);
+                digit_payload += signed_digits.len();
+                digit_width_cost += signed_digits.len() * public_bound;
+
+                let q_neg = u.neg ^ v.neg;
+                let mut coeff_acc = coeff_u;
+                for &(digit_neg, sh) in &signed_digits {
+                    let term = signed_mul_mag_for_halfgcd_test(
+                        coeff_v,
+                        q_neg ^ digit_neg,
+                        U512::from(1u64) << sh,
+                    );
+                    let before = coeff_acc;
+                    coeff_acc = signed_add_for_halfgcd_test(
+                        coeff_acc,
+                        signed_neg_for_halfgcd_test(term),
+                    );
+                    let op_mag_bits = u512_bit_len_for_halfgcd_test(before.mag)
+                        .max(u512_bit_len_for_halfgcd_test(term.mag))
+                        .max(u512_bit_len_for_halfgcd_test(coeff_acc.mag));
+                    coeff_width_cost += op_mag_bits.max(1) + 1;
+                }
+
+                let denom = coeff_v.mag;
+                assert!(!denom.is_zero(), "restoring-final coefficient denominator vanished");
+                let low_numer = if coeff_u.mag.is_zero() {
+                    coeff_acc.mag
+                } else {
+                    assert!(
+                        !coeff_acc.mag.is_zero(),
+                        "restoring-final adjusted coefficient numerator underflow"
+                    );
+                    coeff_acc.mag - U512::from(1u64)
+                };
+                let high_numer = if coeff_u.mag.is_zero() {
+                    low_numer
+                } else {
+                    coeff_acc.mag + denom - U512::from(1u64)
+                };
+                let low_q = low_numer / denom;
+                let high_q = high_numer / denom;
+                let high_branch = q_direct != low_q;
+                let numer = if high_branch {
+                    assert_eq!(
+                        q_direct, high_q,
+                        "restoring-final coefficient reverse quotient candidates missed"
+                    );
+                    high_numer
+                } else {
+                    low_numer
+                };
+                let ambiguous = low_q != high_q;
+                ambiguous_branches += ambiguous as usize;
+                let decoded_q_neg = !(coeff_acc.neg ^ coeff_v.neg);
+                assert_eq!(decoded_q_neg, q_neg, "restoring-final coefficient reverse sign mismatch");
+                let decoder_digits =
+                    nonrestoring_floor_restoring_final_digits_for_centered_test(numer, denom);
+                let decoder_width = u512_bit_len_for_halfgcd_test(numer)
+                    .max(u512_bit_len_for_halfgcd_test(denom))
+                    .max(1);
+                let denom_width = u512_bit_len_for_halfgcd_test(denom);
+                let alignment = u512_bit_len_for_halfgcd_test(numer)
+                    .saturating_sub(denom_width);
+                assert!(
+                    alignment < (1usize << exact_barrel_bits),
+                    "stored alignment exceeded the 256-bit barrel"
+                );
+                decoder_digit += decoder_digits.len() * decoder_width.saturating_sub(1);
+                align_pop_barrel += decoder_width * alignment.count_ones() as usize;
+                align_variable_bits += usize_bit_len_for_payload_test(alignment);
+                if ambiguous {
+                    branch_select += (2 * decoder_width).saturating_sub(1);
+                }
+
+                count += 1;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_direct);
+                let r = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                u = v;
+                v = r;
+                coeff_u = coeff_v;
+                coeff_v = coeff_acc;
+            }
+
+            assert_eq!(u.mag, U512::from(1u64), "restoring-final trace ended at non-unit gcd");
+            let public_width_sum = (0..count)
+                .map(|step| direct_centered_public_width_bound_for_step(n, step))
+                .sum::<usize>();
+            let inactive_positions_tapered = public_width_sum - digit_payload;
+            let barrel_and_scan_tapered = public_width_sum * (8usize + 1usize);
+            let pointadd_for = |select_factor: usize| -> isize {
+                let extraction_oneway = digit_width_cost
+                    + barrel_and_scan_tapered
+                    + select_factor * public_width_sum
+                    + inactive_positions_tapered;
+                642_716isize + 2 * (3 * coeff_width_cost + 2 * extraction_oneway) as isize
+            };
+            let select1 = pointadd_for(1);
+            let stored = select1 + 4 * (decoder_digit + align_pop_barrel) as isize;
+            let stored_branch = select1 + 4 * (decoder_digit + align_pop_barrel + branch_select) as isize;
+            let fixed_scratch = n + exact_barrel_bits * count + count;
+            let variable_scratch = n + align_variable_bits + ambiguous_branches;
+            if sample_idx < 64 {
+                first64_stored += stored;
+                first64_stored_branch += stored_branch;
+            }
+            stored_select1.push(stored);
+            stored_branch_select1.push(stored_branch);
+            fixed_scratches.push(fixed_scratch);
+            variable_scratches.push(variable_scratch);
+            align_pop_barrels.push(align_pop_barrel);
+            branch_selects.push(branch_select);
+            branch_counts.push(ambiguous_branches);
+        }
+
+        let mean = |rows: &[isize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let p99_isize = |rows: &mut Vec<isize>| -> isize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+        let p99_usize = |rows: &mut Vec<usize>| -> usize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+        let stored_mean = mean(&stored_select1);
+        let stored_branch_mean = mean(&stored_branch_select1);
+        let stored_first64 = first64_stored as f64 / 64.0;
+        let stored_branch_first64 = first64_stored_branch as f64 / 64.0;
+        let stored_p99 = p99_isize(&mut stored_select1);
+        let stored_branch_p99 = p99_isize(&mut stored_branch_select1);
+        let fixed_scratch_p99 = p99_usize(&mut fixed_scratches);
+        let fixed_scratch_max = *fixed_scratches.last().unwrap();
+        let variable_scratch_p99 = p99_usize(&mut variable_scratches);
+        let variable_scratch_max = *variable_scratches.last().unwrap();
+        let align_pop_barrel_p99 = p99_usize(&mut align_pop_barrels);
+        let branch_select_p99 = p99_usize(&mut branch_selects);
+        let branch_count_p99 = p99_usize(&mut branch_counts);
+        let branch_count_max = *branch_counts.last().unwrap();
+        println!("METRIC centered_direct_restoring_final_stored_align_select1_mean={stored_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_stored_align_select1_first64={stored_first64:.3}");
+        println!("METRIC centered_direct_restoring_final_stored_align_select1_p99={stored_p99}");
+        println!(
+            "METRIC centered_direct_restoring_final_stored_align_select1_gap_to_2700k={:.3}",
+            stored_mean - TARGET
+        );
+        println!("METRIC centered_direct_restoring_final_stored_align_branch_select1_mean={stored_branch_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_stored_align_branch_select1_first64={stored_branch_first64:.3}");
+        println!("METRIC centered_direct_restoring_final_stored_align_branch_select1_p99={stored_branch_p99}");
+        println!(
+            "METRIC centered_direct_restoring_final_stored_align_branch_select1_gap_to_2700k={:.3}",
+            stored_branch_mean - TARGET
+        );
+        println!("METRIC centered_direct_restoring_final_stored_align_fixed_scratch_p99={fixed_scratch_p99}");
+        println!("METRIC centered_direct_restoring_final_stored_align_fixed_scratch_max={fixed_scratch_max}");
+        println!("METRIC centered_direct_restoring_final_stored_align_variable_scratch_p99={variable_scratch_p99}");
+        println!("METRIC centered_direct_restoring_final_stored_align_variable_scratch_max={variable_scratch_max}");
+        println!("METRIC centered_direct_restoring_final_stored_align_pop_barrel_p99={align_pop_barrel_p99}");
+        println!("METRIC centered_direct_restoring_final_stored_align_branch_select_p99={branch_select_p99}");
+        println!("METRIC centered_direct_restoring_final_stored_align_branch_count_p99={branch_count_p99}");
+        println!("METRIC centered_direct_restoring_final_stored_align_branch_count_max={branch_count_max}");
+        eprintln!(
+            "Direct-centered restoring-final stored alignment decoder: stored_mean={stored_mean:.1}, stored_branch_mean={stored_branch_mean:.1}, first64=({stored_first64:.1},{stored_branch_first64:.1}), p99=({stored_p99},{stored_branch_p99}), fixed_scratch_p99={fixed_scratch_p99}, variable_scratch_p99={variable_scratch_p99}, branch_count_p99={branch_count_p99}"
+        );
+        assert!(
+            stored_mean < TARGET && stored_first64 < TARGET,
+            "stored alignment no longer recovers the average-gate margin"
+        );
+        assert!(
+            stored_branch_mean < TARGET && stored_branch_first64 < TARGET,
+            "stored branch-selected alignment lost the average-gate margin"
+        );
+        assert!(
+            fixed_scratch_p99 > 663,
+            "fixed alignment/branch history fits Google scratch; promote stored-metadata route"
+        );
+        assert!(
+            variable_scratch_p99 <= 663,
+            "even variable alignment metadata stopped fitting; no compression target remains"
+        );
+    }
+
+    #[test]
     fn direct_centered_signnorm_normalization_sign_mbu_is_dense_too() {
         // The sign-normalized direct-centered route keeps quotient signs on the
         // phase-clean q_neg=false path by recording when the centered remainder

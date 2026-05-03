@@ -118,10 +118,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             blocker: "logical coefficient signs reduce exact cneg work, but split p99 is still 46960 over target and normalization-sign scratch remains 765 p99",
         },
         Candidate {
-            name: "direct_centered_restoring_final_raw_digits",
-            scratch_bits: 618,
+            name: "direct_centered_restoring_final_stored_alignment",
+            scratch_bits: 602,
             charged_toffoli: None,
-            blocker: "restoring-final select1 now has phase-clean toy cleanup and scan-free lower bound averages 2465688 with p99 2610296, but exact coefficient decode averages 3145482 and alignment MBU is dense",
+            blocker: "restoring-final select1 now has phase-clean toy cleanup; stored alignment+branch decoder averages 2645270 with variable metadata p99 602, but fixed metadata is scratch-dead and exact variable parser/cleanup is unbuilt",
         },
         Candidate {
             name: "direct_centered_signnorm_rank_compressed_signs",
@@ -311,6 +311,21 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_avg_noscan_select3_gap =
         direct_restoring_final_avg_noscan_select3_mean as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let direct_restoring_final_avg_noscan_select3_p99 = 2_823_264usize;
+    let direct_restoring_final_stored_align_select1_mean = 2_537_430usize;
+    let direct_restoring_final_stored_align_select1_first64 = 2_532_052usize;
+    let direct_restoring_final_stored_align_select1_p99 = 2_689_752usize;
+    let direct_restoring_final_stored_align_branch_select1_mean = 2_645_270usize;
+    let direct_restoring_final_stored_align_branch_select1_first64 = 2_639_465usize;
+    let direct_restoring_final_stored_align_branch_select1_p99 = 2_812_592usize;
+    let direct_restoring_final_stored_align_branch_select1_gap =
+        direct_restoring_final_stored_align_branch_select1_mean as isize
+            - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
+    let direct_restoring_final_stored_align_fixed_scratch_p99 = 1_318usize;
+    let direct_restoring_final_stored_align_variable_scratch_p99 = 602usize;
+    let direct_restoring_final_stored_align_variable_scratch_max = 615usize;
+    let direct_restoring_final_stored_align_pop_barrel_p99 = 19_928usize;
+    let direct_restoring_final_stored_align_branch_select_p99 = 31_033usize;
+    let direct_restoring_final_stored_align_branch_count_p99 = 117usize;
     let direct_restoring_final_coeff_decoder_alignment_degree_n14 = 13usize;
     let direct_restoring_final_coeff_decoder_alignment_density_n14 = 8_278usize;
     let direct_restoring_final_coeff_decoder_alignment_max_n14 = 13usize;
@@ -590,6 +605,19 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_first64={direct_restoring_final_avg_noscan_select3_first64}");
     println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_gap_to_2700k={direct_restoring_final_avg_noscan_select3_gap}");
     println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_p99={direct_restoring_final_avg_noscan_select3_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_select1_mean={direct_restoring_final_stored_align_select1_mean}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_select1_first64={direct_restoring_final_stored_align_select1_first64}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_select1_p99={direct_restoring_final_stored_align_select1_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_branch_select1_mean={direct_restoring_final_stored_align_branch_select1_mean}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_branch_select1_first64={direct_restoring_final_stored_align_branch_select1_first64}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_branch_select1_p99={direct_restoring_final_stored_align_branch_select1_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_branch_select1_gap_to_2700k={direct_restoring_final_stored_align_branch_select1_gap}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_fixed_scratch_p99={direct_restoring_final_stored_align_fixed_scratch_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_variable_scratch_p99={direct_restoring_final_stored_align_variable_scratch_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_variable_scratch_max={direct_restoring_final_stored_align_variable_scratch_max}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_pop_barrel_p99={direct_restoring_final_stored_align_pop_barrel_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_branch_select_p99={direct_restoring_final_stored_align_branch_select_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_branch_count_p99={direct_restoring_final_stored_align_branch_count_p99}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_degree_n14={direct_restoring_final_coeff_decoder_alignment_degree_n14}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_density_n14={direct_restoring_final_coeff_decoder_alignment_density_n14}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_max_n14={direct_restoring_final_coeff_decoder_alignment_max_n14}");
@@ -850,6 +878,14 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && direct_restoring_final_avg_noscan_select3_first64 < GOOGLE_LOW_QUBIT_TOFFOLI
             && direct_restoring_final_avg_noscan_select3_p99 > GOOGLE_LOW_QUBIT_TOFFOLI,
         "restoring-final average gate changed; revisit selector factor and scan-free decoder"
+    );
+    assert!(
+        direct_restoring_final_stored_align_branch_select1_mean < GOOGLE_LOW_QUBIT_TOFFOLI
+            && direct_restoring_final_stored_align_branch_select1_first64
+                < GOOGLE_LOW_QUBIT_TOFFOLI
+            && direct_restoring_final_stored_align_fixed_scratch_p99 > GOOGLE_LOW_QUBIT_SCRATCH
+            && direct_restoring_final_stored_align_variable_scratch_p99 <= STRICT_SCRATCH + 2,
+        "restoring-final stored-alignment metadata changed; revisit exact parser/packing blocker"
     );
     assert!(
         direct_restoring_final_coeff_decoder_alignment_degree_n14 + 1 >= 14

@@ -9105,6 +9105,26 @@ mod tests {
         local_count_ccx_for_plusminus_cost(&b.ops[start..])
     }
 
+    fn emit_twos_cneg_direct_for_centered_test(
+        b: &mut super::super::B,
+        v: &[super::super::QubitId],
+        ctrl: super::super::QubitId,
+    ) {
+        for &q in v {
+            b.cx(ctrl, q);
+        }
+        super::super::cadd_nbit_const_direct_fast(b, v, U256::from(1u64), ctrl);
+    }
+
+    fn twos_cneg_direct_cost_for_centered_test(width: usize) -> usize {
+        let mut b = super::super::B::new();
+        let v = b.alloc_qubits(width);
+        let ctrl = b.alloc_qubit();
+        let start = b.ops.len();
+        emit_twos_cneg_direct_for_centered_test(&mut b, &v, ctrl);
+        local_count_ccx_for_plusminus_cost(&b.ops[start..])
+    }
+
     #[test]
     fn direct_centered_nonrestoring_current_signed_digit_primitive_kills_margin() {
         // The reopened direct-rounding ledger assumes each signed quotient
@@ -9657,6 +9677,178 @@ mod tests {
         assert!(
             phase_dirty_cases > 0,
             "naive q_neg digit-control toggle unexpectedly became phase-clean"
+        );
+    }
+
+    #[test]
+    fn direct_centered_sign_normalized_inline_coeff_budget_probe() {
+        // Alternative to a signed quotient-control primitive: after each
+        // centered step, conditionally negate the new remainder and coefficient
+        // row when the centered remainder is negative.  That keeps the next
+        // divisor/remainder magnitudes nonnegative and all quotient digits in
+        // the phase-clean q_neg=false path, but it charges a cneg on both the
+        // denominator and coefficient lanes.
+        let p = SECP256K1_P;
+        let samples = 32_768usize;
+        let mut rng = 0x2800_d1ce_51a9_0001u64;
+        let n = 256usize;
+        let coeff_lane_width = 258usize;
+        let cneg_costs = (0..=coeff_lane_width)
+            .map(|w| if w == 0 { 0 } else { twos_cneg_direct_cost_for_centered_test(w) })
+            .collect::<Vec<_>>();
+        let cneg257 = cneg_costs[257];
+        let cneg258 = cneg_costs[258];
+        let mut base_inline_3x = Vec::with_capacity(samples);
+        let mut norm_once_static = Vec::with_capacity(samples);
+        let mut norm_split_static = Vec::with_capacity(samples);
+        let mut norm_counts = Vec::with_capacity(samples);
+        let mut norm_costs_static = Vec::with_capacity(samples);
+        let mut norm_rem_costs = Vec::with_capacity(samples);
+        let mut norm_coeff_costs = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = u512_from_u256_for_halfgcd_test(p);
+            let mut v = u512_from_u256_for_halfgcd_test(x);
+            let mut coeff_u = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut coeff_v = smag_for_halfgcd_test(false, U512::from(1u64));
+            let (mut digit_payload, mut digit_width_cost, mut count) =
+                (0usize, 0usize, 0usize);
+            let mut coeff_width_cost = 0usize;
+            let mut norm_count = 0usize;
+            let mut norm_rem_cost = 0usize;
+            let mut norm_coeff_cost = 0usize;
+            while !v.is_zero() {
+                let public_bound = direct_centered_public_width_bound_for_step(n, count);
+                let adjusted = u + (v >> 1usize);
+                let q_direct = adjusted / v;
+                let (digits, _rem, _final_negative) =
+                    nonrestoring_floor_digits_for_centered_test(adjusted, v);
+                let signed_digits =
+                    nonrestoring_floor_signed_digits_for_centered_test(adjusted, v);
+                digit_payload += digits;
+                digit_width_cost += digits * public_bound;
+
+                let mut coeff_acc = coeff_u;
+                for &(digit_neg, sh) in &signed_digits {
+                    let term = signed_mul_mag_for_halfgcd_test(
+                        coeff_v,
+                        digit_neg,
+                        U512::from(1u64) << sh,
+                    );
+                    let before = coeff_acc;
+                    coeff_acc = signed_add_for_halfgcd_test(
+                        coeff_acc,
+                        signed_neg_for_halfgcd_test(term),
+                    );
+                    let op_mag_bits = u512_bit_len_for_halfgcd_test(before.mag)
+                        .max(u512_bit_len_for_halfgcd_test(term.mag))
+                        .max(u512_bit_len_for_halfgcd_test(coeff_acc.mag));
+                    coeff_width_cost += op_mag_bits.max(1) + 1;
+                }
+                let qv_coeff = signed_mul_mag_for_halfgcd_test(coeff_v, false, q_direct);
+                let coeff_direct = signed_add_for_halfgcd_test(
+                    coeff_u,
+                    signed_neg_for_halfgcd_test(qv_coeff),
+                );
+                assert_eq!(coeff_acc, coeff_direct, "positive-q coefficient replay mismatch");
+
+                let qv = v * q_direct;
+                let r_signed = if u >= qv {
+                    smag_for_halfgcd_test(false, u - qv)
+                } else {
+                    smag_for_halfgcd_test(true, qv - u)
+                };
+                let next_v = r_signed.mag;
+                if r_signed.neg && !r_signed.mag.is_zero() {
+                    norm_count += 1;
+                    norm_rem_cost += cneg_costs[public_bound];
+                    norm_coeff_cost += cneg_costs[coeff_lane_width];
+                    coeff_acc = signed_neg_for_halfgcd_test(coeff_acc);
+                }
+                coeff_u = coeff_v;
+                coeff_v = coeff_acc;
+                u = v;
+                v = next_v;
+                count += 1;
+            }
+            assert_eq!(u, U512::from(1u64), "sign-normalized trace ended at non-unit gcd");
+            let coeff_mod = signed_u512_mod_u256_for_centered_test(coeff_u, p);
+            assert_eq!(
+                coeff_mod.mul_mod(x, p),
+                U256::from(1u64),
+                "sign-normalized coefficient is not the denominator inverse"
+            );
+            let public_width_sum = (0..count)
+                .map(|step| direct_centered_public_width_bound_for_step(n, step))
+                .sum::<usize>();
+            let final_fix_tapered = (0..count)
+                .map(|step| 2usize * direct_centered_public_width_bound_for_step(n, step) - 1usize)
+                .sum::<usize>();
+            let inactive_positions_tapered = public_width_sum - digit_payload;
+            let barrel_and_scan_tapered = public_width_sum * (8usize + 1usize);
+            let extraction_oneway = digit_width_cost
+                + barrel_and_scan_tapered
+                + final_fix_tapered
+                + inactive_positions_tapered;
+            let base = 642_716isize + 2 * (3 * coeff_width_cost + 2 * extraction_oneway) as isize;
+            let norm_once = 642_716isize
+                + 2 * (3 * coeff_width_cost
+                    + norm_coeff_cost
+                    + norm_rem_cost
+                    + 2 * extraction_oneway) as isize;
+            let norm_split = 642_716isize
+                + 2 * (3 * coeff_width_cost
+                    + norm_coeff_cost
+                    + 2 * (extraction_oneway + norm_rem_cost)) as isize;
+            base_inline_3x.push(base);
+            norm_once_static.push(norm_once);
+            norm_split_static.push(norm_split);
+            norm_counts.push(norm_count);
+            norm_costs_static.push(norm_coeff_cost + norm_rem_cost);
+            norm_rem_costs.push(norm_rem_cost);
+            norm_coeff_costs.push(norm_coeff_cost);
+        }
+        base_inline_3x.sort_unstable();
+        norm_once_static.sort_unstable();
+        norm_split_static.sort_unstable();
+        norm_counts.sort_unstable();
+        norm_costs_static.sort_unstable();
+        norm_rem_costs.sort_unstable();
+        norm_coeff_costs.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let base_p99 = base_inline_3x[p99];
+        let norm_once_p99 = norm_once_static[p99];
+        let norm_split_p99 = norm_split_static[p99];
+        let norm_count_p99 = norm_counts[p99];
+        let norm_count_max = *norm_counts.last().unwrap();
+        let norm_cost_p99 = norm_costs_static[p99];
+        let norm_rem_p99 = norm_rem_costs[p99];
+        let norm_coeff_p99 = norm_coeff_costs[p99];
+        let norm_once_gap = norm_once_p99 - 2_700_000isize;
+        let norm_split_gap = norm_split_p99 - 2_700_000isize;
+        println!("METRIC centered_direct_signnorm_cneg257={cneg257}");
+        println!("METRIC centered_direct_signnorm_cneg258={cneg258}");
+        println!("METRIC centered_direct_signnorm_base_inline3x_p99={base_p99}");
+        println!("METRIC centered_direct_signnorm_count_p99={norm_count_p99}");
+        println!("METRIC centered_direct_signnorm_count_max={norm_count_max}");
+        println!("METRIC centered_direct_signnorm_cost_p99={norm_cost_p99}");
+        println!("METRIC centered_direct_signnorm_rem_cost_p99={norm_rem_p99}");
+        println!("METRIC centered_direct_signnorm_coeff_cost_p99={norm_coeff_p99}");
+        println!("METRIC centered_direct_signnorm_once_p99={norm_once_p99}");
+        println!("METRIC centered_direct_signnorm_split_p99={norm_split_p99}");
+        println!("METRIC centered_direct_signnorm_once_gap_to_2700k={norm_once_gap}");
+        println!("METRIC centered_direct_signnorm_split_gap_to_2700k={norm_split_gap}");
+        eprintln!(
+            "Direct-centered sign-normalized inline budget: cneg257={cneg257}, cneg258={cneg258}, base3x_p99={base_p99}, norm_count_p99={norm_count_p99}, norm_count_max={norm_count_max}, norm_cost_p99={norm_cost_p99}, rem_p99={norm_rem_p99}, coeff_p99={norm_coeff_p99}, once_p99={norm_once_p99}, split_p99={norm_split_p99}, once_gap={norm_once_gap}, split_gap={norm_split_gap}"
+        );
+        assert!(norm_count_p99 > 0, "sign normalization never fired on sampled traces");
+        assert!(norm_once_gap < 0, "single-pass sign normalization budget stopped fitting");
+        assert!(
+            norm_split_gap > 0,
+            "split sign normalization budget reaches the low-qubit target; promote to implementation"
         );
     }
 

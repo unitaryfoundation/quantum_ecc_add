@@ -15268,6 +15268,49 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_restoring_final_coeff_decoder_alignment_mbu_is_dense_too() {
+        // The average gate ledger says the restoring-final coefficient decoder
+        // would fit if its quotient alignment scan were free.  That requires
+        // phase-clean alignment metadata.  As with the direct quotient parser,
+        // a representative parity of those coefficient-decoder alignments is
+        // already high-degree and dense on toy fields, so generic MBUC is not
+        // the missing scan-deletion primitive.
+        let cases = [
+            (8usize, 251u16, 0b101usize),
+            (10usize, 1021u16, 0b101usize),
+            (12usize, 4093u16, 0b1011usize),
+            (14usize, 16381u16, 0b1011usize),
+        ];
+        for &(n, p, mask) in &cases {
+            let (degree, density, max_alignment) =
+                direct_centered_restoring_final_coeff_decoder_alignment_parity_anf_stats(
+                    n, p, mask,
+                );
+            let table = 1usize << n;
+            eprintln!(
+                "direct-centered restoring-final coeff decoder alignment ANF: n={n}, mask={mask:#b}, degree={degree}, density={density}/{table}, max_alignment={max_alignment}"
+            );
+            if n == 14 {
+                println!("METRIC centered_direct_restoring_final_coeff_decoder_alignment_degree_n14={degree}");
+                println!("METRIC centered_direct_restoring_final_coeff_decoder_alignment_density_n14={density}");
+                println!("METRIC centered_direct_restoring_final_coeff_decoder_alignment_max_n14={max_alignment}");
+            }
+            assert!(
+                max_alignment + 1 >= n,
+                "toy coefficient decoder stopped exercising wide alignment metadata"
+            );
+            assert!(
+                degree + 1 >= n,
+                "coefficient decoder alignment parity unexpectedly low degree"
+            );
+            assert!(
+                density > table / 4,
+                "coefficient decoder alignment parity unexpectedly sparse"
+            );
+        }
+    }
+
+    #[test]
     fn direct_centered_restoring_final_coeff_decoder_cost_kills_margin() {
         // The coefficient formula avoids a stored digit payload, but a coherent
         // decoder still has to synthesize each quotient.  Charge a generous
@@ -16274,6 +16317,88 @@ mod tests {
             .max()
             .unwrap_or(0);
         (degree, density, max_high_count, total_high_count)
+    }
+
+    fn direct_centered_restoring_final_coeff_decoder_alignment_parity_anf_stats(
+        n: usize,
+        p: u16,
+        alignment_mask: usize,
+    ) -> (usize, usize, usize) {
+        let size = 1usize << n;
+        let mut anf = vec![0u8; size];
+        let mut max_alignment = 0usize;
+        let bit_len = |z: u128| -> usize {
+            if z == 0 {
+                0
+            } else {
+                128usize - z.leading_zeros() as usize
+            }
+        };
+        for x in 1..p {
+            let mut u = p as i128;
+            let mut v = x as i128;
+            let mut coeff_u = 0i128;
+            let mut coeff_v = 1i128;
+            let mut parity = 0u8;
+            while v != 0 {
+                let abs_u = u.unsigned_abs();
+                let abs_v = v.unsigned_abs();
+                let adjusted = abs_u + (abs_v >> 1);
+                let q_abs = adjusted / abs_v;
+                let q_signed = if (u < 0) ^ (v < 0) {
+                    -(q_abs as i128)
+                } else {
+                    q_abs as i128
+                };
+                let next_v = u - q_signed * v;
+                let next_coeff_v = coeff_u - q_signed * coeff_v;
+                let denom = coeff_v.unsigned_abs();
+                assert!(denom > 0, "coefficient decoder denominator vanished");
+                let next_abs = next_coeff_v.unsigned_abs();
+                let low_numer = if coeff_u == 0 {
+                    next_abs
+                } else {
+                    assert!(next_abs > 0, "coefficient decoder numerator underflowed");
+                    next_abs - 1
+                };
+                let high_numer = if coeff_u == 0 {
+                    low_numer
+                } else {
+                    next_abs + denom - 1
+                };
+                let low_q = low_numer / denom;
+                let high_q = high_numer / denom;
+                let numer = if q_abs == low_q {
+                    low_numer
+                } else {
+                    assert_eq!(q_abs, high_q, "coefficient decoder q escaped candidates");
+                    high_numer
+                };
+                let alignment = bit_len(numer).saturating_sub(bit_len(denom));
+                max_alignment = max_alignment.max(alignment);
+                parity ^= ((alignment & alignment_mask).count_ones() as u8) & 1;
+                u = v;
+                v = next_v;
+                coeff_u = coeff_v;
+                coeff_v = next_coeff_v;
+            }
+            anf[x as usize] = parity;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&c| c != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| if c != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density, max_alignment)
     }
 
     fn direct_centered_restoring_final_coeff_decoder_costs_for_test(

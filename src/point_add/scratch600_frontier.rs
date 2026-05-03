@@ -121,7 +121,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_raw_digits",
             scratch_bits: 618,
             charged_toffoli: None,
-            blocker: "restoring-final model is under 2.7M and phase-clean in toy; exact coefficient decode averages 3145482, while scan-free lower bound averages 2658276 and still needs a coherent scan deletion",
+            blocker: "restoring-final model is under 2.7M and phase-clean in toy; exact coefficient decode averages 3145482, while scan-free lower bound averages 2658276 but alignment MBU is dense",
         },
         Candidate {
             name: "direct_centered_signnorm_rank_compressed_signs",
@@ -288,6 +288,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_avg_noscan_select3_gap =
         direct_restoring_final_avg_noscan_select3_mean as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let direct_restoring_final_avg_noscan_select3_p99 = 2_823_264usize;
+    let direct_restoring_final_coeff_decoder_alignment_degree_n14 = 13usize;
+    let direct_restoring_final_coeff_decoder_alignment_density_n14 = 8_278usize;
+    let direct_restoring_final_coeff_decoder_alignment_max_n14 = 13usize;
     let plusminus_raw_scratch = 564usize;
     let plusminus_unary_scratch_p99 = 640usize;
     let plusminus_parser_over_strict = plusminus_unary_scratch_p99 - STRICT_SCRATCH;
@@ -504,6 +507,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_mean={direct_restoring_final_avg_noscan_select3_mean}");
     println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_gap_to_2700k={direct_restoring_final_avg_noscan_select3_gap}");
     println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_p99={direct_restoring_final_avg_noscan_select3_p99}");
+    println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_degree_n14={direct_restoring_final_coeff_decoder_alignment_degree_n14}");
+    println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_density_n14={direct_restoring_final_coeff_decoder_alignment_density_n14}");
+    println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_max_n14={direct_restoring_final_coeff_decoder_alignment_max_n14}");
     println!("METRIC scratch600_plusminus_raw_scratch_bits={plusminus_raw_scratch}");
     println!("METRIC scratch600_plusminus_unary_scratch_p99={plusminus_unary_scratch_p99}");
     println!("METRIC scratch600_plusminus_parser_over_strict_bits={plusminus_parser_over_strict}");
@@ -705,6 +711,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && direct_restoring_final_avg_noscan_select3_gap < 0
             && direct_restoring_final_avg_noscan_select3_p99 > GOOGLE_LOW_QUBIT_TOFFOLI,
         "restoring-final average gate changed; revisit exact decoder scan deletion"
+    );
+    assert!(
+        direct_restoring_final_coeff_decoder_alignment_degree_n14 + 1 >= 14
+            && direct_restoring_final_coeff_decoder_alignment_density_n14 > (1usize << 14) / 4
+            && direct_restoring_final_coeff_decoder_alignment_max_n14 + 1 >= 14,
+        "restoring-final coefficient decoder alignment metadata stopped looking dense"
     );
     assert!(halfgcd_tail_over_google > 0, "half-GCD checkpoint must be fused before it fits");
     assert!(

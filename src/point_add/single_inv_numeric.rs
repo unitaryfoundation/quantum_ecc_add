@@ -9658,6 +9658,142 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_lazy_final_negative_loses_width_invariant() {
+        // Try to delete the direct-centered final non-restoring correction by
+        // accepting the raw one-too-large quotient whenever the raw remainder
+        // is negative.  This removes the 2w-1 final-fix circuit, but it also
+        // weakens the centered remainder invariant.  Charge two ledgers:
+        // an empirical actual-width oracle and a conservative full-width
+        // fallback.  If the optimistic oracle is not clearly better, this
+        // cannot be the missing low-qubit primitive.
+        for &(n, p16) in &[(8usize, 251u16), (10, 1021), (12, 4093), (14, 16381)] {
+            let mut max_count = 0usize;
+            let mut max_width = 0usize;
+            let mut width_bound_violations = 0usize;
+            for x in 1..p16 {
+                let mut u = smag_for_halfgcd_test(false, U512::from(p16 as u64));
+                let mut v = smag_for_halfgcd_test(false, U512::from(x as u64));
+                let mut count = 0usize;
+                while !v.mag.is_zero() {
+                    assert!(count < 4 * n + 16, "lazy-final toy trace did not converge n={n} x={x}");
+                    let width = u512_bit_len_for_halfgcd_test(u.mag)
+                        .max(u512_bit_len_for_halfgcd_test(v.mag));
+                    let centered_bound = direct_centered_public_width_bound_for_step(n, count);
+                    width_bound_violations += (width > centered_bound) as usize;
+                    max_width = max_width.max(width);
+                    let adjusted = u.mag + (v.mag >> 1usize);
+                    let q_floor = adjusted / v.mag;
+                    let (_digits, _rem, final_negative) =
+                        nonrestoring_floor_digits_for_centered_test(adjusted, v.mag);
+                    let q_lazy = q_floor + U512::from(final_negative as u64);
+                    let q_neg = u.neg ^ v.neg;
+                    let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_lazy);
+                    let r = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                    u = v;
+                    v = r;
+                    count += 1;
+                }
+                max_count = max_count.max(count);
+            }
+            eprintln!(
+                "lazy-final direct-centered toy: n={n}, max_count={max_count}, max_width={max_width}, centered_width_violations={width_bound_violations}"
+            );
+            if n == 14 {
+                println!("METRIC centered_direct_lazy_final_toy_max_count_n14={max_count}");
+                println!("METRIC centered_direct_lazy_final_toy_width_violations_n14={width_bound_violations}");
+            }
+            assert!(width_bound_violations > 0, "lazy final unexpectedly kept the centered public taper");
+        }
+
+        let p = SECP256K1_P;
+        let samples = 32_768usize;
+        let mut rng = 0x2800_d1ce_1a27_f1a1u64;
+        let n = 256usize;
+        let mut oracle_pointadds = Vec::with_capacity(samples);
+        let mut full_width_pointadds = Vec::with_capacity(samples);
+        let mut counts = Vec::with_capacity(samples);
+        let mut final_negs = Vec::with_capacity(samples);
+        let mut max_width_seen = 0usize;
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(p));
+            let mut v = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(x));
+            let (mut digit_payload, mut oracle_digit_width_cost, mut oracle_width_sum) =
+                (0usize, 0usize, 0usize);
+            let (mut count, mut final_count) = (0usize, 0usize);
+            while !v.mag.is_zero() {
+                assert!(count < 1024, "lazy-final secp trace did not converge");
+                let width = u512_bit_len_for_halfgcd_test(u.mag)
+                    .max(u512_bit_len_for_halfgcd_test(v.mag));
+                max_width_seen = max_width_seen.max(width);
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let q_floor = adjusted / v.mag;
+                let (digits, _rem, final_negative) =
+                    nonrestoring_floor_digits_for_centered_test(adjusted, v.mag);
+                digit_payload += digits;
+                oracle_digit_width_cost += digits * width;
+                oracle_width_sum += width;
+                final_count += final_negative as usize;
+                let q_lazy = q_floor + U512::from(final_negative as u64);
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_lazy);
+                let r = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                u = v;
+                v = r;
+                count += 1;
+            }
+            let replay_per_div = digit_payload * 587usize;
+            let oracle_inactive = oracle_width_sum - digit_payload;
+            let oracle_extraction_oneway =
+                oracle_digit_width_cost + oracle_width_sum * (8usize + 1usize) + oracle_inactive;
+            let oracle_pointadd = 642_716isize
+                + 2 * (replay_per_div + 2 * oracle_extraction_oneway) as isize;
+
+            let full_width_sum = count * n;
+            let full_digit_width_cost = digit_payload * n;
+            let full_inactive = full_width_sum - digit_payload;
+            let full_extraction_oneway =
+                full_digit_width_cost + full_width_sum * (8usize + 1usize) + full_inactive;
+            let full_pointadd = 642_716isize
+                + 2 * (replay_per_div + 2 * full_extraction_oneway) as isize;
+
+            oracle_pointadds.push(oracle_pointadd);
+            full_width_pointadds.push(full_pointadd);
+            counts.push(count);
+            final_negs.push(final_count);
+        }
+        oracle_pointadds.sort_unstable();
+        full_width_pointadds.sort_unstable();
+        counts.sort_unstable();
+        final_negs.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let oracle_p50 = oracle_pointadds[samples / 2];
+        let oracle_p99 = oracle_pointadds[p99];
+        let full_p99 = full_width_pointadds[p99];
+        let count_p99 = counts[p99];
+        let count_max = *counts.last().unwrap();
+        let final_p99 = final_negs[p99];
+        let oracle_gap_to_2700k = oracle_p99 - 2_700_000isize;
+        let full_gap_to_2700k = full_p99 - 2_700_000isize;
+        println!("METRIC centered_direct_lazy_final_samples={samples}");
+        println!("METRIC centered_direct_lazy_final_oracle_p50={oracle_p50}");
+        println!("METRIC centered_direct_lazy_final_oracle_p99={oracle_p99}");
+        println!("METRIC centered_direct_lazy_final_oracle_gap_to_2700k={oracle_gap_to_2700k}");
+        println!("METRIC centered_direct_lazy_final_fullwidth_p99={full_p99}");
+        println!("METRIC centered_direct_lazy_final_fullwidth_gap_to_2700k={full_gap_to_2700k}");
+        println!("METRIC centered_direct_lazy_final_count_p99={count_p99}");
+        println!("METRIC centered_direct_lazy_final_count_max={count_max}");
+        println!("METRIC centered_direct_lazy_final_negative_p99={final_p99}");
+        println!("METRIC centered_direct_lazy_final_max_width_seen={max_width_seen}");
+        eprintln!(
+            "Lazy-final direct-centered ledger: oracle_p50={oracle_p50}, oracle_p99={oracle_p99}, full_p99={full_p99}, count_p99={count_p99}, count_max={count_max}, final_p99={final_p99}, oracle_gap2700={oracle_gap_to_2700k}, full_gap2700={full_gap_to_2700k}"
+        );
+        assert!(oracle_gap_to_2700k < 0, "even actual-width lazy-final oracle misses low-qubit metric");
+        assert!(full_gap_to_2700k > 0, "full-width lazy-final fallback unexpectedly reaches low-qubit metric");
+    }
+
+    #[test]
     fn direct_centered_classical_alignment_metadata_would_remove_barrel_blocker() {
         // If the quotient parser can expose alignment metadata as phase-clean
         // classical bits, the variable barrel layers become classically

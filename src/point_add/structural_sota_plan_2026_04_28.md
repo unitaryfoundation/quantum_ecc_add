@@ -1868,6 +1868,16 @@ toy `n=14` it reports degree `13`, density `8298/16384`, and max digit payload
 the signed digit payload and driving the replay with those classical bits; it
 still needs a structural phase-clean parser/control mechanism.
 
+Trying to delete the final correction has the same shape.  In
+`direct_centered_lazy_final_negative_loses_width_invariant`, the raw
+one-too-large quotient is accepted whenever the non-restoring remainder is
+negative.  This removes the final-fix circuit, but toy `n=14` already has 3114
+violations of the centered public-width taper.  On 32,768 secp samples, an
+actual-width oracle gives p99 `2,429,440`, but a full-width fallback gives p99
+`3,578,528` with p99 count `180`.  So lazy final correction is not the missing
+static primitive; it only works if the same data-dependent width/control oracle
+already exists.
+
 ## 6. Post-BY ground-up attempt: Strategy E slope-coordinate map
 
 New non-BY candidate: make the slope the live y-coordinate and avoid an

@@ -27965,6 +27965,109 @@ mod tests {
             max_constrained_schedule_decode_mismatches,
             max_constrained_schedule_cursor_mismatches,
         ) = evaluate_schedule_codebooks(&max_constrained_flatten);
+        const HOLDOUT_SAMPLES: usize = 8192;
+        let mut holdout_rng = 0xdec0_de1d_381f_17u64;
+        let mut holdout_traces = Vec::with_capacity(HOLDOUT_SAMPLES);
+        for _ in 0..HOLDOUT_SAMPLES {
+            let mut x = rand_u256(&mut holdout_rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(p));
+            let mut v = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(x));
+            let mut coeff_u = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut coeff_v = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut alignments = Vec::new();
+
+            while !v.mag.is_zero() {
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let q_direct = adjusted / v.mag;
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_direct);
+                let next_v = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                let qv_coeff = signed_mul_mag_for_halfgcd_test(coeff_v, q_neg, q_direct);
+                let next_coeff_v = signed_add_for_halfgcd_test(
+                    coeff_u,
+                    signed_neg_for_halfgcd_test(qv_coeff),
+                );
+
+                let denom = coeff_v.mag;
+                assert!(
+                    !denom.is_zero(),
+                    "restoring-final holdout coefficient denominator vanished"
+                );
+                let low_numer = if coeff_u.mag.is_zero() {
+                    next_coeff_v.mag
+                } else {
+                    assert!(
+                        !next_coeff_v.mag.is_zero(),
+                        "restoring-final holdout numerator underflow"
+                    );
+                    next_coeff_v.mag - U512::from(1u64)
+                };
+                let alignment = u512_bit_len_for_halfgcd_test(low_numer)
+                    .saturating_sub(u512_bit_len_for_halfgcd_test(denom));
+                alignments.push(alignment);
+
+                u = v;
+                v = next_v;
+                coeff_u = coeff_v;
+                coeff_v = next_coeff_v;
+            }
+            assert!(
+                alignments.len() < MAX_STEPS,
+                "holdout trace exceeded alignment model"
+            );
+            holdout_traces.push(alignments);
+        }
+        let evaluate_schedule_on_traces =
+            |flatten: &[bool],
+             eval_traces: &[Vec<usize>]|
+             -> (f64, usize, usize, usize, usize, usize) {
+                let mut bit_rows = Vec::with_capacity(eval_traces.len());
+                let mut missing_symbols = 0usize;
+                let mut missing_traces = 0usize;
+                let mut over_budget_rows = 0usize;
+                for alignments in eval_traces {
+                    let mut bits = 0usize;
+                    let mut trace_missing = false;
+                    for (step, &alignment) in alignments.iter().enumerate() {
+                        let lens_by_step = if flatten[step] {
+                            &balanced_code_lens_by_step[step]
+                        } else {
+                            &shannon_code_lens_by_step[step]
+                        };
+                        if let Some(&len) = lens_by_step.get(&alignment) {
+                            bits += len;
+                        } else {
+                            missing_symbols += 1;
+                            trace_missing = true;
+                        }
+                    }
+                    over_budget_rows += (bits as isize > GOOGLE_PREFIX_BIT_BUDGET) as usize;
+                    missing_traces += trace_missing as usize;
+                    bit_rows.push(bits);
+                }
+                let bit_mean = mean_usize(&bit_rows);
+                let bit_max = bit_rows.iter().copied().max().unwrap_or(0);
+                let bit_p99 = p99_usize(&mut bit_rows);
+                (
+                    bit_mean,
+                    bit_p99,
+                    bit_max,
+                    missing_symbols,
+                    missing_traces,
+                    over_budget_rows,
+                )
+            };
+        let (
+            max_constrained_holdout_bit_mean,
+            max_constrained_holdout_bit_p99,
+            max_constrained_holdout_bit_max,
+            max_constrained_holdout_missing_symbols,
+            max_constrained_holdout_missing_traces,
+            max_constrained_holdout_over_budget_rows,
+        ) = evaluate_schedule_on_traces(&max_constrained_flatten, &holdout_traces);
         let schedule_decode_stats = |flatten: &[bool]| -> (f64, usize, f64, usize) {
             let mut dynamic_even_rows = Vec::with_capacity(SAMPLES);
             let mut variable_decode_rows = Vec::with_capacity(SAMPLES);
@@ -28118,6 +28221,13 @@ mod tests {
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_schedule_prefix_collisions={max_constrained_schedule_prefix_collisions}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_schedule_decode_mismatches={max_constrained_schedule_decode_mismatches}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_schedule_cursor_mismatches={max_constrained_schedule_cursor_mismatches}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_samples={HOLDOUT_SAMPLES}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_bit_mean={max_constrained_holdout_bit_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_bit_p99={max_constrained_holdout_bit_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_bit_max_seen={max_constrained_holdout_bit_max}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_missing_symbols={max_constrained_holdout_missing_symbols}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_missing_traces={max_constrained_holdout_missing_traces}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_over_budget_rows={max_constrained_holdout_over_budget_rows}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_selective_dynamic_even_mean={selective_dynamic_even_mean:.3}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_selective_dynamic_even_p99={selective_dynamic_even_p99}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_selective_variable_decode_mean={selective_variable_decode_mean:.3}");
@@ -28160,7 +28270,7 @@ mod tests {
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_support_max_span={support_max_span}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols={support_max_symbols}");
         eprintln!(
-            "Direct-centered low-branch weighted prefix span floor: prefix_nodes={prefix_node_mean:.1}, materialized={materialized_digit_mean:.1}, tree_decode={tree_decode_mean:.1}, dyn_even/odd=({dynamic_even_mean:.1},{dynamic_odd_mean:.1}), shannon_bits_p99={shannon_prefix_bit_p99}, balanced_bits_p99={balanced_prefix_bit_p99}, selective_bits_p99/max={selective_prefix_bit_p99}/{selective_prefix_bit_max}, maxfit_bits_p99/max={max_constrained_prefix_bit_p99}/{max_constrained_prefix_bit_max}, selective_scratch={selective_prefix_scratch_p99}, maxfit_scratch={max_constrained_prefix_scratch_max}, balanced_dyn={balanced_dynamic_even_mean:.1}, selective_dyn={selective_dynamic_even_mean:.1}, maxfit_dyn={max_constrained_dynamic_even_mean:.1}, flat_ratio={weighted_total_over_node_roundtrip:.3}x, variable_ratio={variable_total_over_node_roundtrip:.3}x, offset1_ratio={variable_offset1_total_over_node_roundtrip:.3}x, balanced_ratio={balanced_total_over_node_roundtrip:.3}x, selective_ratio={selective_total_over_node_roundtrip:.3}x, maxfit_ratio={max_constrained_total_over_node_roundtrip:.3}x, budget={RATIO_BUDGET:.3}x, gaps=({weighted_scaled_gap:.1},{variable_scaled_gap:.1},{variable_offset1_scaled_gap:.1},{balanced_scaled_gap:.1},{selective_scaled_gap:.1},{max_constrained_scaled_gap:.1}), span24_uniform_gap={span24_scaled_gap:.1}, span24_symbols={span24_symbol_mean:.1}/{span24_symbol_p99}"
+            "Direct-centered low-branch weighted prefix span floor: prefix_nodes={prefix_node_mean:.1}, materialized={materialized_digit_mean:.1}, tree_decode={tree_decode_mean:.1}, dyn_even/odd=({dynamic_even_mean:.1},{dynamic_odd_mean:.1}), shannon_bits_p99={shannon_prefix_bit_p99}, balanced_bits_p99={balanced_prefix_bit_p99}, selective_bits_p99/max={selective_prefix_bit_p99}/{selective_prefix_bit_max}, maxfit_bits_p99/max={max_constrained_prefix_bit_p99}/{max_constrained_prefix_bit_max}, holdout_missing/over/max={max_constrained_holdout_missing_symbols}/{max_constrained_holdout_over_budget_rows}/{max_constrained_holdout_bit_max}, selective_scratch={selective_prefix_scratch_p99}, maxfit_scratch={max_constrained_prefix_scratch_max}, balanced_dyn={balanced_dynamic_even_mean:.1}, selective_dyn={selective_dynamic_even_mean:.1}, maxfit_dyn={max_constrained_dynamic_even_mean:.1}, flat_ratio={weighted_total_over_node_roundtrip:.3}x, variable_ratio={variable_total_over_node_roundtrip:.3}x, offset1_ratio={variable_offset1_total_over_node_roundtrip:.3}x, balanced_ratio={balanced_total_over_node_roundtrip:.3}x, selective_ratio={selective_total_over_node_roundtrip:.3}x, maxfit_ratio={max_constrained_total_over_node_roundtrip:.3}x, budget={RATIO_BUDGET:.3}x, gaps=({weighted_scaled_gap:.1},{variable_scaled_gap:.1},{variable_offset1_scaled_gap:.1},{balanced_scaled_gap:.1},{selective_scaled_gap:.1},{max_constrained_scaled_gap:.1}), span24_uniform_gap={span24_scaled_gap:.1}, span24_symbols={span24_symbol_mean:.1}/{span24_symbol_p99}"
         );
 
         assert!(
@@ -28218,6 +28328,13 @@ mod tests {
                 && max_constrained_schedule_max_bits == max_constrained_prefix_bit_max
                 && max_constrained_schedule_decoded_symbols > 800_000,
             "max-constrained selective schedule canonical codebook wiring failed"
+        );
+        assert!(
+            max_constrained_holdout_missing_symbols > 0
+                && max_constrained_holdout_missing_traces > 0
+                && max_constrained_holdout_over_budget_rows > 0
+                && max_constrained_holdout_bit_max > GOOGLE_PREFIX_BIT_BUDGET as usize,
+            "disjoint secp holdout now fits the trained peak schedule; revisit promotion"
         );
     }
 

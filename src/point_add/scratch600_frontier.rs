@@ -175,7 +175,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_low_branch_selective_prefix_flatten_floor",
             scratch_bits: 663,
             charged_toffoli: None,
-            blocker: "p99-only selective length-flattening has 394 sampled max prefix bits and would need 676 scratch; trimming 9 balanced steps gives a 381-bit sampled max, fits 663 scratch, and projects 2661534 with 38466 margin; support-2..18 generated balanced block2 selected-add/sub roundtrip family is phase-clean across 289 pairs with max 804 CCX, and peak-fit mixed schedule codebooks decode 856854 sampled symbols with no collisions or mismatches; toy exact-domain train/exhaust probes miss symbols in all 4 cases (n16: 598 missing traces, 3050 over-budget sample-schedule traces), so promotion needs full production circuit insertion plus a non-sampled support proof or charged fallback",
+            blocker: "p99-only selective length-flattening has 394 sampled max prefix bits and would need 676 scratch; trimming 9 balanced steps gives a 381-bit sampled max, fits 663 scratch, and projects 2661534 with 38466 margin; support-2..18 generated balanced block2 selected-add/sub roundtrip family is phase-clean across 289 pairs with max 804 CCX, and peak-fit mixed schedule codebooks decode 856854 sampled symbols with no collisions or mismatches; disjoint 8192 secp holdout already has 182 missing symbols, 170 missing traces, 7 over-budget rows, and 391 seen bits; toy exact-domain train/exhaust probes also miss symbols in all 4 cases, so promotion needs full production circuit insertion plus a non-sampled support proof or charged fallback",
         },
         Candidate {
             name: "direct_centered_restoring_final_mixed4to8_joint_binary_floor",
@@ -900,6 +900,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_peakfit_toy_largest_missing_symbols = 598usize;
     let direct_restoring_final_peakfit_toy_largest_sample_over_budget_traces = 3_050usize;
     let direct_restoring_final_peakfit_toy_largest_exact_over_budget_traces = 3_132usize;
+    let direct_restoring_final_peakfit_holdout_missing_symbols = 182usize;
+    let direct_restoring_final_peakfit_holdout_missing_traces = 170usize;
+    let direct_restoring_final_peakfit_holdout_over_budget_rows = 7usize;
+    let direct_restoring_final_peakfit_holdout_max_seen_bits = 391usize;
     let direct_restoring_final_low_branch_prefix_support_weighted_span24_uniform_gap =
         1_684.686f64;
     let direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_mean = 1.000f64;
@@ -2014,6 +2018,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_peakfit_toy_largest_missing_symbols={direct_restoring_final_peakfit_toy_largest_missing_symbols}");
     println!("METRIC scratch600_direct_restoring_final_peakfit_toy_largest_sample_over_budget_traces={direct_restoring_final_peakfit_toy_largest_sample_over_budget_traces}");
     println!("METRIC scratch600_direct_restoring_final_peakfit_toy_largest_exact_over_budget_traces={direct_restoring_final_peakfit_toy_largest_exact_over_budget_traces}");
+    println!("METRIC scratch600_direct_restoring_final_peakfit_holdout_missing_symbols={direct_restoring_final_peakfit_holdout_missing_symbols}");
+    println!("METRIC scratch600_direct_restoring_final_peakfit_holdout_missing_traces={direct_restoring_final_peakfit_holdout_missing_traces}");
+    println!("METRIC scratch600_direct_restoring_final_peakfit_holdout_over_budget_rows={direct_restoring_final_peakfit_holdout_over_budget_rows}");
+    println!("METRIC scratch600_direct_restoring_final_peakfit_holdout_max_seen_bits={direct_restoring_final_peakfit_holdout_max_seen_bits}");
     println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_span24_uniform_gap_to_2700k={direct_restoring_final_low_branch_prefix_support_weighted_span24_uniform_gap:.3}");
     println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_mean={direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_mean:.3}");
     println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_p99={direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_p99}");
@@ -3065,6 +3073,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && direct_restoring_final_peakfit_toy_largest_missing_symbols > 500
             && direct_restoring_final_peakfit_toy_largest_sample_over_budget_traces > 3_000
             && direct_restoring_final_peakfit_toy_largest_exact_over_budget_traces > 3_000
+            && direct_restoring_final_peakfit_holdout_missing_symbols == 182
+            && direct_restoring_final_peakfit_holdout_missing_traces == 170
+            && direct_restoring_final_peakfit_holdout_over_budget_rows == 7
+            && direct_restoring_final_peakfit_holdout_max_seen_bits > 381
             && direct_restoring_final_low_branch_prefix_support_weighted_span24_uniform_gap > 0.0
             && direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_p99 == 1
             && direct_restoring_final_low_branch_prefix_support_weighted_support_noncontig_steps

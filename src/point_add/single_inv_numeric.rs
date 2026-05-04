@@ -4458,6 +4458,131 @@ mod tests {
         )
     }
 
+    fn halfgcd_signed_two_coeff_apply_active_charged_joint_window_floor_for_test(
+        x0: SignedMagU512ForHalfGcdTest,
+        x1: SignedMagU512ForHalfGcdTest,
+        window: usize,
+    ) -> (usize, usize, usize, usize, usize, usize) {
+        const MOD_ADD_FAST_CCX: usize = 1024;
+        const MOD_DOUBLE_FAST_CCX: usize = 255;
+        const MOD_HALVE_FAST_CCX: usize = 255;
+        const FIELD_BITS: usize = 256;
+        assert!((2..=8).contains(&window), "unexpected joint-window width");
+
+        #[derive(Clone, Copy)]
+        struct Row {
+            cost: usize,
+            occupied: usize,
+            digits: usize,
+        }
+
+        fn better(candidate: Row, old: Option<Row>) -> Option<Row> {
+            match old {
+                Some(row)
+                    if (row.cost, row.digits, row.occupied)
+                        <= (candidate.cost, candidate.digits, candidate.occupied) =>
+                {
+                    Some(row)
+                }
+                _ => Some(candidate),
+            }
+        }
+
+        let top0 = u512_bit_len_for_halfgcd_test(x0.mag).saturating_sub(1);
+        let top1 = u512_bit_len_for_halfgcd_test(x1.mag).saturating_sub(1);
+        let top = top0.max(top1);
+        let max_bits = u512_bit_len_for_halfgcd_test(x0.mag)
+            .max(u512_bit_len_for_halfgcd_test(x1.mag))
+            .max(1);
+        let digit_bits = window - 1;
+        let max_digit = (1i16 << digit_bits) - 1;
+        let carry_bound = max_digit as isize;
+        let states = 2 * carry_bound as usize + 1;
+        let mut digit_values = Vec::<i16>::with_capacity((1usize << digit_bits) + 1);
+        digit_values.push(0);
+        for digit in (1..=max_digit).step_by(2) {
+            digit_values.push(digit);
+            digit_values.push(-digit);
+        }
+        let bit_at = |x: U512, bit: usize| -> i16 {
+            if bit >= 512 {
+                0
+            } else {
+                ((x >> bit).as_limbs()[0] & 1) as i16
+            }
+        };
+        let state_idx = |carry: isize| -> usize {
+            assert!(
+                (-carry_bound..=carry_bound).contains(&carry),
+                "joint-window carry escaped bound"
+            );
+            (carry + carry_bound) as usize
+        };
+
+        let mut dp = vec![vec![None::<Row>; states]; states];
+        dp[state_idx(0)][state_idx(0)] = Some(Row { cost: 0, occupied: 0, digits: 0 });
+        for bit in 0..(max_bits + window + 4) {
+            let b0 = bit_at(x0.mag, bit);
+            let b1 = bit_at(x1.mag, bit);
+            let mut next = vec![vec![None::<Row>; states]; states];
+            for c0_idx in 0..states {
+                for c1_idx in 0..states {
+                    let Some(row) = dp[c0_idx][c1_idx] else { continue; };
+                    let c0 = c0_idx as isize - carry_bound;
+                    let c1 = c1_idx as isize - carry_bound;
+                    for &d0 in &digit_values {
+                        let s0 = b0 as isize + c0 - d0 as isize;
+                        if s0.rem_euclid(2) != 0 {
+                            continue;
+                        }
+                        let nc0 = s0 / 2;
+                        if !(-carry_bound..=carry_bound).contains(&nc0) {
+                            continue;
+                        }
+                        for &d1 in &digit_values {
+                            let s1 = b1 as isize + c1 - d1 as isize;
+                            if s1.rem_euclid(2) != 0 {
+                                continue;
+                            }
+                            let nc1 = s1 / 2;
+                            if !(-carry_bound..=carry_bound).contains(&nc1) {
+                                continue;
+                            }
+                            let digit_count = (d0 != 0) as usize + (d1 != 0) as usize;
+                            let occupied = digit_count != 0;
+                            let delta_cost = if occupied { MOD_ADD_FAST_CCX } else { 0 }
+                                + 2 * FIELD_BITS * digit_count * window;
+                            let candidate = Row {
+                                cost: row.cost + delta_cost,
+                                occupied: row.occupied + occupied as usize,
+                                digits: row.digits + digit_count,
+                            };
+                            let slot = &mut next[state_idx(nc0)][state_idx(nc1)];
+                            *slot = better(candidate, *slot);
+                        }
+                    }
+                }
+            }
+            dp = next;
+        }
+        let row = dp[state_idx(0)][state_idx(0)]
+            .expect("active-charged joint-window carry did not drain");
+        let app_floor = top * (MOD_DOUBLE_FAST_CCX + MOD_HALVE_FAST_CCX)
+            + row.occupied * MOD_ADD_FAST_CCX;
+        let compact_source_floor = 2 * FIELD_BITS * row.digits * digit_bits;
+        let active_source_floor = 2 * FIELD_BITS * row.digits;
+        let signed_digit_values = 1usize << digit_bits;
+        let table_row_floor = row.occupied * ((signed_digit_values + 1).pow(2) - 1);
+        (
+            app_floor,
+            compact_source_floor,
+            active_source_floor,
+            table_row_floor,
+            row.occupied,
+            row.digits,
+        )
+    }
+
     fn halfgcd_signed_two_coeff_apply_cost_for_test(
         x0: SignedMagU512ForHalfGcdTest,
         x1: SignedMagU512ForHalfGcdTest,
@@ -8678,6 +8803,262 @@ mod tests {
             joint_missing_active_mean > joint_active_slack_oneway
                 && joint_full_active_mean > TARGET,
             "joint signed-binary active predicate now fits; promote a real recoder/cleanup toy"
+        );
+    }
+
+    #[test]
+    fn half_gcd_second_column_active_charged_joint_window_still_misses() {
+        // Optimize the recoding with the active/zero bit included in the DP
+        // objective.  This is a stronger lower bound than optimizing compact
+        // cost first and charging active controls afterward.
+        const SCAFFOLD_AFTER_DIV: usize = 642_716;
+        const TAIL_REPLAY_PER_BIT_CCX: usize = 587;
+        const TARGET: f64 = 2_700_000.0;
+        const DEPTH: usize = 64;
+        const WINDOWS: [usize; 1] = [2];
+        let p = SECP256K1_P;
+        let samples = 4096usize;
+        let mut rng = 0x5ec0_0001_d7ba_0064u64;
+        let exact_barrel_bits = 8usize;
+        let mut pointadds = vec![Vec::<isize>::with_capacity(samples); WINDOWS.len()];
+        let mut apps = vec![Vec::<usize>::with_capacity(samples); WINDOWS.len()];
+        let mut compact_sources = vec![Vec::<usize>::with_capacity(samples); WINDOWS.len()];
+        let mut active_sources = vec![Vec::<usize>::with_capacity(samples); WINDOWS.len()];
+        let mut table_rows = vec![Vec::<usize>::with_capacity(samples); WINDOWS.len()];
+        let mut occupied_rows = vec![Vec::<usize>::with_capacity(samples); WINDOWS.len()];
+        let mut digit_rows = vec![Vec::<usize>::with_capacity(samples); WINDOWS.len()];
+
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = p;
+            let mut v = x;
+            let mut b = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut d = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut residual_digit_width = 0usize;
+            let mut coeff_digit_width = 0usize;
+            let mut final_fix_width = 0usize;
+            let mut residual_width_sum = 0usize;
+            let mut coeff_width_sum = 0usize;
+            let mut decoder_digit = 0usize;
+            let mut decoder_final_fix = 0usize;
+            let mut decoder_width_sum = 0usize;
+            let mut prefix_steps = 0usize;
+
+            while prefix_steps < DEPTH && !v.is_zero() {
+                let q = u / v;
+                let (digits, prefinal_rem, prefinal_q) =
+                    nonrestoring_prefinal_signed_digits_for_centered_test(
+                        u512_from_u256_for_halfgcd_test(u),
+                        u512_from_u256_for_halfgcd_test(v),
+                    );
+                let final_negative = prefinal_rem.neg && !prefinal_rem.mag.is_zero();
+                let floor_q = if final_negative {
+                    prefinal_q - U512::from(1u64)
+                } else {
+                    prefinal_q
+                };
+                assert_eq!(floor_q, u512_from_u256_for_halfgcd_test(q));
+                let width = u256_bit_len(u).max(u256_bit_len(v)).max(1);
+                let coeff_width = u512_bit_len_for_halfgcd_test(b.mag)
+                    .max(u512_bit_len_for_halfgcd_test(d.mag))
+                    .max(1)
+                    + 1;
+                residual_digit_width += digits.len() * width.saturating_sub(1);
+                final_fix_width += (2 * width).saturating_sub(1)
+                    + (2 * coeff_width).saturating_sub(1);
+                residual_width_sum += width;
+                coeff_width_sum += coeff_width;
+
+                let mut coeff_acc = b;
+                for &(digit_neg, sh) in &digits {
+                    let term = signed_mul_mag_for_halfgcd_test(
+                        d,
+                        digit_neg,
+                        U512::from(1u64) << sh,
+                    );
+                    let next = signed_add_for_halfgcd_test(
+                        coeff_acc,
+                        signed_neg_for_halfgcd_test(term),
+                    );
+                    let op_width = u512_bit_len_for_halfgcd_test(coeff_acc.mag)
+                        .max(u512_bit_len_for_halfgcd_test(term.mag))
+                        .max(u512_bit_len_for_halfgcd_test(next.mag))
+                        .max(1)
+                        + 1;
+                    coeff_digit_width += op_width.saturating_sub(1);
+                    coeff_acc = next;
+                }
+                if final_negative {
+                    coeff_acc = signed_add_for_halfgcd_test(coeff_acc, d);
+                }
+
+                let rem = u - q * v;
+                let nb = d;
+                let nd = signed_sub_scaled_for_halfgcd_test(b, q, d);
+                assert_eq!(coeff_acc, nd, "active-charged joint-window prefix replay mismatch");
+
+                let numer = if b.mag.is_zero() {
+                    nd.mag
+                } else {
+                    nd.mag - U512::from(1u64)
+                };
+                let denom = nb.mag;
+                assert!(!denom.is_zero(), "active-charged decoder denominator vanished");
+                assert_eq!(
+                    numer / denom,
+                    u512_from_u256_for_halfgcd_test(q),
+                    "active-charged decoder reverse quotient mismatch"
+                );
+                let (decoder_digits, decoder_prefinal_rem, decoder_prefinal_q) =
+                    nonrestoring_prefinal_signed_digits_for_centered_test(numer, denom);
+                let decoder_final_negative =
+                    decoder_prefinal_rem.neg && !decoder_prefinal_rem.mag.is_zero();
+                let decoder_floor_q = if decoder_final_negative {
+                    decoder_prefinal_q - U512::from(1u64)
+                } else {
+                    decoder_prefinal_q
+                };
+                assert_eq!(decoder_floor_q, u512_from_u256_for_halfgcd_test(q));
+                let decoder_width = u512_bit_len_for_halfgcd_test(numer)
+                    .max(u512_bit_len_for_halfgcd_test(denom))
+                    .max(1);
+                decoder_digit += decoder_digits.len() * decoder_width.saturating_sub(1);
+                decoder_final_fix += (2 * decoder_width).saturating_sub(1);
+                decoder_width_sum += decoder_width;
+
+                u = v;
+                v = rem;
+                b = nb;
+                d = nd;
+                prefix_steps += 1;
+            }
+
+            let mut tail_payload = 0usize;
+            let mut tail_extract_floor = 0usize;
+            let mut tail_logbarrel_floor = 0usize;
+            let mut tu = u;
+            let mut tv = v;
+            while !tv.is_zero() {
+                let q = tu / tv;
+                let q_bits = u256_bit_len(q);
+                let tail_width = u256_bit_len(tu).max(u256_bit_len(tv)).max(1);
+                tail_payload += q_bits;
+                tail_extract_floor += q_bits * 3 * tail_width + tail_width;
+                tail_logbarrel_floor += tail_width * exact_barrel_bits;
+                let rem = tu - q * tv;
+                tu = tv;
+                tv = rem;
+            }
+            assert_eq!(
+                tu,
+                U256::from(1u64),
+                "active-charged joint-window fixed-depth tail missed gcd 1"
+            );
+
+            let exact_extraction = residual_digit_width
+                + coeff_digit_width
+                + final_fix_width
+                + (residual_width_sum + coeff_width_sum) * (exact_barrel_bits + 1);
+            let replay = tail_payload * TAIL_REPLAY_PER_BIT_CCX;
+            let decoder_exact =
+                decoder_digit + decoder_final_fix + decoder_width_sum * (exact_barrel_bits + 1);
+            let tail_exact = tail_extract_floor + tail_logbarrel_floor;
+            let without_app = SCAFFOLD_AFTER_DIV as isize
+                + 2 * (replay + 2 * exact_extraction) as isize
+                + 4 * decoder_exact as isize
+                + 4 * tail_exact as isize;
+
+            for (idx, &window) in WINDOWS.iter().enumerate() {
+                let (
+                    app,
+                    compact_source,
+                    active_source,
+                    table_row_floor,
+                    occupied,
+                    digits,
+                ) = halfgcd_signed_two_coeff_apply_active_charged_joint_window_floor_for_test(
+                    b, d, window,
+                );
+                let pointadd =
+                    without_app + 2 * (app + compact_source + active_source) as isize;
+                pointadds[idx].push(pointadd);
+                apps[idx].push(app);
+                compact_sources[idx].push(compact_source);
+                active_sources[idx].push(active_source);
+                table_rows[idx].push(table_row_floor);
+                occupied_rows[idx].push(occupied);
+                digit_rows[idx].push(digits);
+            }
+        }
+
+        let mean_isize = |rows: &[isize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let mean_usize = |rows: &[usize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let p99_isize = |rows: &mut Vec<isize>| -> isize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+
+        let mut best: Option<(usize, f64, isize, f64, f64, f64, f64, f64, f64)> = None;
+        for (idx, &window) in WINDOWS.iter().enumerate() {
+            let mean = mean_isize(&pointadds[idx]);
+            let p99 = p99_isize(&mut pointadds[idx]);
+            let app_mean = mean_usize(&apps[idx]);
+            let compact_mean = mean_usize(&compact_sources[idx]);
+            let active_mean = mean_usize(&active_sources[idx]);
+            let table_mean = mean_usize(&table_rows[idx]);
+            let occupied_mean = mean_usize(&occupied_rows[idx]);
+            let digit_mean = mean_usize(&digit_rows[idx]);
+            if best.map(|(_, old_mean, _, _, _, _, _, _, _)| mean < old_mean).unwrap_or(true) {
+                best = Some((
+                    window,
+                    mean,
+                    p99,
+                    app_mean,
+                    compact_mean,
+                    active_mean,
+                    table_mean,
+                    occupied_mean,
+                    digit_mean,
+                ));
+            }
+        }
+        let (
+            best_window,
+            best_mean,
+            best_p99,
+            best_app_mean,
+            best_compact_mean,
+            best_active_mean,
+            best_table_mean,
+            best_occupied_mean,
+            best_digit_mean,
+        ) = best.unwrap();
+        println!("METRIC halfgcd_fixed_depth64_active_charged_joint_window_best_w={best_window}");
+        println!("METRIC halfgcd_fixed_depth64_active_charged_joint_window_pointadd_mean={best_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_active_charged_joint_window_pointadd_p99={best_p99}");
+        println!(
+            "METRIC halfgcd_fixed_depth64_active_charged_joint_window_gap_to_2700k={:.3}",
+            best_mean - TARGET
+        );
+        println!("METRIC halfgcd_fixed_depth64_active_charged_joint_window_app_mean={best_app_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_active_charged_joint_window_compact_source_mean={best_compact_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_active_charged_joint_window_active_source_mean={best_active_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_active_charged_joint_window_table_row_mean={best_table_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_active_charged_joint_window_occupied_mean={best_occupied_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_active_charged_joint_window_digits_mean={best_digit_mean:.3}");
+        eprintln!(
+            "half-GCD active-charged joint signed-window recoder: w={best_window}, mean={best_mean:.1}, p99={best_p99}, app={best_app_mean:.1}, compact={best_compact_mean:.1}, active={best_active_mean:.1}, table={best_table_mean:.1}, occupied={best_occupied_mean:.1}, digits={best_digit_mean:.1}"
+        );
+        assert!(
+            best_mean > TARGET,
+            "active-charged joint signed-window recoding now clears 2.7M; promote a real recoder/cleanup circuit"
         );
     }
 

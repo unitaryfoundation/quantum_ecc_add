@@ -6266,6 +6266,170 @@ mod tests {
     }
 
     #[test]
+    fn raw_pattern_postdelta_does_not_clean_a_mask() {
+        // Stronger streaming-parser escape hatch: maybe a window can advance
+        // delta, use A, and then clear A from the post-window delta plus the
+        // raw odd pattern.  If (window, pattern, delta_out) still maps to
+        // multiple A masks, the parser needs extra checkpoint/rank state.
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let ceil_log2 = |v: usize| -> usize {
+            if v <= 1 {
+                0
+            } else {
+                usize::BITS as usize - (v - 1).leading_zeros() as usize
+            }
+        };
+        let seq_rank_bits =
+            |seqs: &[Vec<(usize, u16, i64)>],
+             groups: &BTreeMap<(usize, u16, i64), BTreeSet<u16>>|
+             -> (usize, usize, usize) {
+                let mut rows = Vec::with_capacity(seqs.len());
+                for seq in seqs {
+                    let mut bits = 0usize;
+                    for key in seq {
+                        bits += ceil_log2(groups.get(key).expect("post-delta key").len());
+                    }
+                    rows.push(bits);
+                }
+                rows.sort_unstable();
+                let p99 = rows[rows.len() * 99 / 100];
+                let max = *rows.last().unwrap();
+                let mean_milli = rows.iter().sum::<usize>() * 1_000 / rows.len().max(1);
+                (p99, max, mean_milli)
+            };
+
+        const W: usize = 16;
+        const WINDOWS: usize = 35;
+        let samples = 10_000usize;
+        let mut sampler = Sampler::new(b"by-raw-pattern-postdelta-a-v1", SECP256K1_P);
+        let mut sample_groups = BTreeMap::<(usize, u16, i64), BTreeSet<u16>>::new();
+        let mut sample_seqs = Vec::<Vec<(usize, u16, i64)>>::with_capacity(samples);
+        for _ in 0..samples {
+            let x = sampler.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(SECP256K1_P);
+            let mut g = SInt::from_u(x);
+            let mut seq = Vec::with_capacity(WINDOWS);
+            for window_idx in 0..WINDOWS {
+                let mut pattern = 0u16;
+                let mut a_mask = 0u16;
+                for bit in 0..W {
+                    let odd = g.bit0();
+                    if odd {
+                        pattern |= 1u16 << bit;
+                    }
+                    if odd && delta > 0 {
+                        a_mask |= 1u16 << bit;
+                    }
+                    divstep_sint_state(&mut delta, &mut f, &mut g);
+                }
+                let key = (window_idx, pattern, delta);
+                sample_groups.entry(key).or_default().insert(a_mask);
+                seq.push(key);
+            }
+            sample_seqs.push(seq);
+        }
+        let sample_ambiguous = sample_groups.values().filter(|v| v.len() > 1).count();
+        let sample_max_choices = sample_groups.values().map(BTreeSet::len).max().unwrap_or(0);
+        let (sample_rank_p99, sample_rank_max, sample_rank_mean_milli) =
+            seq_rank_bits(&sample_seqs, &sample_groups);
+        println!("METRIC by_raw_pattern_postdelta_sample_keys={}", sample_groups.len());
+        println!("METRIC by_raw_pattern_postdelta_sample_ambiguous_keys={sample_ambiguous}");
+        println!("METRIC by_raw_pattern_postdelta_sample_max_a_choices={sample_max_choices}");
+        println!("METRIC by_raw_pattern_postdelta_sample_rank_p99={sample_rank_p99}");
+        println!("METRIC by_raw_pattern_postdelta_sample_rank_max={sample_rank_max}");
+        println!("METRIC by_raw_pattern_postdelta_sample_rank_mean_milli={sample_rank_mean_milli}");
+        eprintln!(
+            "BY raw-pattern post-delta A cleanup sample: keys={}, ambiguous={sample_ambiguous}, max_choices={sample_max_choices}, rank_p99={sample_rank_p99}, rank_max={sample_rank_max}, rank_mean_milli={sample_rank_mean_milli}",
+            sample_groups.len()
+        );
+
+        let cases = [
+            (8usize, 251u16, 4usize),
+            (10usize, 1021u16, 4usize),
+            (12usize, 4093u16, 4usize),
+            (14usize, 16381u16, 4usize),
+        ];
+        let mut largest_toy_ambiguous = 0usize;
+        let mut largest_toy_max_choices = 0usize;
+        let mut largest_toy_rank_p99 = 0usize;
+        for &(n, p, w) in &cases {
+            let windows = (2 * n).div_ceil(w);
+            let mut groups = BTreeMap::<(usize, u16, i64), BTreeSet<u16>>::new();
+            let mut seqs = Vec::<Vec<(usize, u16, i64)>>::with_capacity(p as usize);
+            for x in 1..p {
+                let mut delta = 1i64;
+                let mut f = SInt::from_u(U256::from(p as u64));
+                let mut g = SInt::from_u(U256::from(x as u64));
+                let mut seq = Vec::with_capacity(windows);
+                for window_idx in 0..windows {
+                    let mut pattern = 0u16;
+                    let mut a_mask = 0u16;
+                    for bit in 0..w {
+                        let odd = g.bit0();
+                        if odd {
+                            pattern |= 1u16 << bit;
+                        }
+                        if odd && delta > 0 {
+                            a_mask |= 1u16 << bit;
+                        }
+                        divstep_sint_state(&mut delta, &mut f, &mut g);
+                    }
+                    let key = (window_idx, pattern, delta);
+                    groups.entry(key).or_default().insert(a_mask);
+                    seq.push(key);
+                }
+                seqs.push(seq);
+            }
+            let ambiguous = groups.values().filter(|v| v.len() > 1).count();
+            let max_choices = groups.values().map(BTreeSet::len).max().unwrap_or(0);
+            let (rank_p99, rank_max, rank_mean_milli) = seq_rank_bits(&seqs, &groups);
+            println!("METRIC by_raw_pattern_postdelta_toy_n{n}_keys={}", groups.len());
+            println!("METRIC by_raw_pattern_postdelta_toy_n{n}_ambiguous_keys={ambiguous}");
+            println!("METRIC by_raw_pattern_postdelta_toy_n{n}_max_a_choices={max_choices}");
+            println!("METRIC by_raw_pattern_postdelta_toy_n{n}_rank_p99={rank_p99}");
+            println!("METRIC by_raw_pattern_postdelta_toy_n{n}_rank_max={rank_max}");
+            println!("METRIC by_raw_pattern_postdelta_toy_n{n}_rank_mean_milli={rank_mean_milli}");
+            eprintln!(
+                "BY raw-pattern post-delta A cleanup toy: n={n}, w={w}, keys={}, ambiguous={ambiguous}, max_choices={max_choices}, rank_p99={rank_p99}, rank_max={rank_max}, rank_mean_milli={rank_mean_milli}",
+                groups.len()
+            );
+            largest_toy_ambiguous = largest_toy_ambiguous.max(ambiguous);
+            largest_toy_max_choices = largest_toy_max_choices.max(max_choices);
+            largest_toy_rank_p99 = largest_toy_rank_p99.max(rank_p99);
+        }
+        println!("METRIC by_raw_pattern_postdelta_toy_largest_ambiguous_keys={largest_toy_ambiguous}");
+        println!("METRIC by_raw_pattern_postdelta_toy_largest_max_a_choices={largest_toy_max_choices}");
+        println!("METRIC by_raw_pattern_postdelta_toy_largest_rank_p99={largest_toy_rank_p99}");
+
+        assert!(
+            sample_ambiguous > 0 || largest_toy_ambiguous > 0,
+            "post-delta A cleanup became injective; revisit raw-pattern streaming parser"
+        );
+        assert_eq!(
+            sample_ambiguous, 13_866,
+            "sampled post-delta A ambiguity changed; update the raw-pattern parser ledger"
+        );
+        assert_eq!(
+            sample_max_choices, 6,
+            "sampled post-delta A choice count changed; update the raw-pattern parser ledger"
+        );
+        assert_eq!(
+            sample_rank_p99, 9,
+            "sampled post-delta A rank payload changed; update the raw-pattern parser ledger"
+        );
+        assert_eq!(
+            largest_toy_max_choices, 4,
+            "toy post-delta A choice count changed; update the raw-pattern parser ledger"
+        );
+        assert!(
+            largest_toy_ambiguous >= 267 && largest_toy_rank_p99 >= 12,
+            "toy post-delta A ambiguity no longer grows enough to block this parser"
+        );
+    }
+
+    #[test]
     fn actual_matrix_sequence_entropy_supports_sub600_history_target() {
         // Storing raw 22-bit (delta,h) keys costs 770 bits for 35 windows, but
         // actual secp256k1 trajectories are highly non-uniform, especially near

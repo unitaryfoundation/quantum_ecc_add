@@ -11568,7 +11568,7 @@ mod tests {
         assert_eq!(
             sample_collisions[5].len(),
             0,
-            "12-bit local lookahead no longer determines sampled endpoint DP choices"
+            "12-pair local lookahead no longer determines sampled endpoint DP choices"
         );
         assert_eq!(
             sample_collisions[7].len(),

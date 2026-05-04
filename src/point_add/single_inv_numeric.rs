@@ -25411,7 +25411,6 @@ mod tests {
             + 8.0 * PREFIX_TREE_NODE_FLOOR_MEAN * (parser_over_node_roundtrip - 1.0);
         let total_scaled_gap = PREFIX_TREE_GAP_TO_2700K
             + 8.0 * PREFIX_TREE_NODE_FLOOR_MEAN * (total_over_node_roundtrip - 1.0);
-
         let num_qubits = b.next_qubit as usize;
         let num_bits = b.next_bit as usize;
         let ops = b.ops;
@@ -26187,6 +26186,22 @@ mod tests {
             + (-PREFIX_TREE_GAP_TO_2700K) / (8.0 * PREFIX_TREE_NODE_FLOOR_MEAN);
         let total_scaled_gap = PREFIX_TREE_GAP_TO_2700K
             + 8.0 * PREFIX_TREE_NODE_FLOOR_MEAN * (total_over_node_roundtrip - 1.0);
+        let materialized_full_add_per_digit =
+            2 * SYMBOLS * COEFF_W + ACC_W.saturating_sub(1);
+        let span_taper_add_per_digit_floor = SHIFT_MAP
+            .iter()
+            .map(|&shift| shift + COEFF_W - 1)
+            .sum::<usize>();
+        let span_taper_arithmetic_floor =
+            arithmetic_ccx - BLOCK_SYMBOLS * 2 * materialized_full_add_per_digit
+                + BLOCK_SYMBOLS * 2 * span_taper_add_per_digit_floor;
+        let span_taper_total_floor = parser_transient_ccx + span_taper_arithmetic_floor;
+        let span_taper_total_over_node_roundtrip =
+            span_taper_total_floor as f64 / node_roundtrip_floor as f64;
+        let span_taper_scaled_gap = PREFIX_TREE_GAP_TO_2700K
+            + 8.0
+                * PREFIX_TREE_NODE_FLOOR_MEAN
+                * (span_taper_total_over_node_roundtrip - 1.0);
 
         let num_qubits = b.next_qubit as usize;
         let num_bits = b.next_bit as usize;
@@ -26259,11 +26274,17 @@ mod tests {
         println!("METRIC centered_direct_restoring_final_prefix_block2_span24_roundtrip_toy_total_over_node_roundtrip={total_over_node_roundtrip:.6}");
         println!("METRIC centered_direct_restoring_final_prefix_block2_span24_roundtrip_toy_roundtrip_ratio_budget={ratio_budget:.6}");
         println!("METRIC centered_direct_restoring_final_prefix_block2_span24_roundtrip_toy_total_scaled_gap_to_2700k={total_scaled_gap:.3}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_span24_taper_materialized_full_add_per_digit={materialized_full_add_per_digit}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_span24_taper_add_per_digit_floor={span_taper_add_per_digit_floor}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_span24_taper_arithmetic_floor={span_taper_arithmetic_floor}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_span24_taper_total_floor={span_taper_total_floor}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_span24_taper_total_over_node_roundtrip={span_taper_total_over_node_roundtrip:.6}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_span24_taper_scaled_gap_to_2700k={span_taper_scaled_gap:.3}");
         println!("METRIC centered_direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_restore_cases={dirty_restore_cases}");
         println!("METRIC centered_direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_history_cases={dirty_history_cases}");
         println!("METRIC centered_direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_phase_cases={dirty_phase_cases}");
         eprintln!(
-            "Direct-centered prefix block2 span24 roundtrip toy: total={total_ccx}, peak={peak}, total/node={total_over_node_roundtrip:.3}x, budget={ratio_budget:.3}x, scaled_gap={total_scaled_gap:.1}, dirty_restore={dirty_restore_cases}, dirty_history={dirty_history_cases}, dirty_phase={dirty_phase_cases}"
+            "Direct-centered prefix block2 span24 roundtrip toy: total={total_ccx}, peak={peak}, total/node={total_over_node_roundtrip:.3}x, taper_total={span_taper_total_floor}, taper_gap={span_taper_scaled_gap:.1}, budget={ratio_budget:.3}x, scaled_gap={total_scaled_gap:.1}, dirty_restore={dirty_restore_cases}, dirty_history={dirty_history_cases}, dirty_phase={dirty_phase_cases}"
         );
         assert_eq!(forward_decode_ccx, 28, "span24 forward decode cost drifted");
         assert_eq!(reverse_decode_ccx, 28, "span24 reverse decode cost drifted");
@@ -26277,6 +26298,11 @@ mod tests {
         assert!(
             total_scaled_gap > 0.0 && total_over_node_roundtrip > ratio_budget,
             "naive span24 selected-addsub unexpectedly still fits"
+        );
+        assert!(
+            span_taper_add_per_digit_floor > materialized_full_add_per_digit
+                && span_taper_scaled_gap > total_scaled_gap,
+            "span-tapered per-leaf adder floor now recovers the span24 selected-addsub margin"
         );
         assert_eq!(dirty_restore_cases, 0, "span24 roundtrip did not restore inputs");
         assert_eq!(dirty_history_cases, 0, "span24 roundtrip leaked history");

@@ -4546,6 +4546,8 @@ mod tests {
             exact_tail_floor: Vec<isize>,
             noscan_tail_floor: Vec<isize>,
             exact_tail_bounded_barrel: Vec<isize>,
+            exact_tail_bounded_plus_one_width: Vec<isize>,
+            exact_tail_bounded_plus_two_width: Vec<isize>,
             noscan_tail_bounded_barrel: Vec<isize>,
             exact_tail_logbarrel: Vec<isize>,
             noscan_tail_logbarrel: Vec<isize>,
@@ -4585,6 +4587,8 @@ mod tests {
                 exact_tail_floor: Vec::with_capacity(samples),
                 noscan_tail_floor: Vec::with_capacity(samples),
                 exact_tail_bounded_barrel: Vec::with_capacity(samples),
+                exact_tail_bounded_plus_one_width: Vec::with_capacity(samples),
+                exact_tail_bounded_plus_two_width: Vec::with_capacity(samples),
                 noscan_tail_bounded_barrel: Vec::with_capacity(samples),
                 exact_tail_logbarrel: Vec::with_capacity(samples),
                 noscan_tail_logbarrel: Vec::with_capacity(samples),
@@ -4827,6 +4831,8 @@ mod tests {
         let mut exact_tail_floor_fitting_rows = 0usize;
         let mut noscan_tail_floor_fitting_rows = 0usize;
         let mut exact_tail_bounded_fitting_rows = 0usize;
+        let mut exact_tail_bounded_plus_one_fitting_rows = 0usize;
+        let mut exact_tail_bounded_plus_two_fitting_rows = 0usize;
         let mut noscan_tail_bounded_fitting_rows = 0usize;
         let mut exact_tail_logbarrel_fitting_rows = 0usize;
         let mut noscan_tail_logbarrel_fitting_rows = 0usize;
@@ -4841,9 +4847,15 @@ mod tests {
             );
             for i in 0..row.exact_tail_floor.len() {
                 let bounded_floor = row.tail_width_sum[i] * bounded_tail_barrel_bits;
+                let extra_width_tax = 4 * row.tail_width_sum[i] as isize;
+                let exact_bounded =
+                    row.exact_tail_floor[i] + 4 * bounded_floor as isize;
                 row.tail_bounded_barrel_floor.push(bounded_floor);
-                row.exact_tail_bounded_barrel
-                    .push(row.exact_tail_floor[i] + 4 * bounded_floor as isize);
+                row.exact_tail_bounded_barrel.push(exact_bounded);
+                row.exact_tail_bounded_plus_one_width
+                    .push(exact_bounded + extra_width_tax);
+                row.exact_tail_bounded_plus_two_width
+                    .push(exact_bounded + 2 * extra_width_tax);
                 row.noscan_tail_bounded_barrel
                     .push(row.noscan_tail_floor[i] + 4 * bounded_floor as isize);
             }
@@ -4853,6 +4865,10 @@ mod tests {
             let exact_tail_floor_mean = mean(&row.exact_tail_floor);
             let noscan_tail_floor_mean = mean(&row.noscan_tail_floor);
             let exact_tail_bounded_mean = mean(&row.exact_tail_bounded_barrel);
+            let exact_tail_bounded_plus_one_mean =
+                mean(&row.exact_tail_bounded_plus_one_width);
+            let exact_tail_bounded_plus_two_mean =
+                mean(&row.exact_tail_bounded_plus_two_width);
             let noscan_tail_bounded_mean = mean(&row.noscan_tail_bounded_barrel);
             let exact_tail_logbarrel_mean = mean(&row.exact_tail_logbarrel);
             let noscan_tail_logbarrel_mean = mean(&row.noscan_tail_logbarrel);
@@ -4879,6 +4895,10 @@ mod tests {
             let exact_tail_floor_p99 = p99_isize(&mut row.exact_tail_floor);
             let noscan_tail_floor_p99 = p99_isize(&mut row.noscan_tail_floor);
             let exact_tail_bounded_p99 = p99_isize(&mut row.exact_tail_bounded_barrel);
+            let exact_tail_bounded_plus_one_p99 =
+                p99_isize(&mut row.exact_tail_bounded_plus_one_width);
+            let exact_tail_bounded_plus_two_p99 =
+                p99_isize(&mut row.exact_tail_bounded_plus_two_width);
             let noscan_tail_bounded_p99 = p99_isize(&mut row.noscan_tail_bounded_barrel);
             let exact_tail_logbarrel_p99 = p99_isize(&mut row.exact_tail_logbarrel);
             let noscan_tail_logbarrel_p99 = p99_isize(&mut row.noscan_tail_logbarrel);
@@ -4904,6 +4924,14 @@ mod tests {
                     as usize;
             exact_tail_bounded_fitting_rows +=
                 (scratch_p99 <= GOOGLE_LOW_QUBIT_SCRATCH && exact_tail_bounded_mean < TARGET)
+                    as usize;
+            exact_tail_bounded_plus_one_fitting_rows +=
+                (scratch_p99 <= GOOGLE_LOW_QUBIT_SCRATCH
+                    && exact_tail_bounded_plus_one_mean < TARGET)
+                    as usize;
+            exact_tail_bounded_plus_two_fitting_rows +=
+                (scratch_p99 <= GOOGLE_LOW_QUBIT_SCRATCH
+                    && exact_tail_bounded_plus_two_mean < TARGET)
                     as usize;
             noscan_tail_bounded_fitting_rows +=
                 (scratch_p99 <= GOOGLE_LOW_QUBIT_SCRATCH && noscan_tail_bounded_mean < TARGET)
@@ -5019,6 +5047,22 @@ mod tests {
                 row.depth
             );
             println!(
+                "METRIC halfgcd_second_col_fixed_depth_d{}_exact_tail_bounded_plus_one_width_mean={exact_tail_bounded_plus_one_mean:.3}",
+                row.depth
+            );
+            println!(
+                "METRIC halfgcd_second_col_fixed_depth_d{}_exact_tail_bounded_plus_one_width_p99={exact_tail_bounded_plus_one_p99}",
+                row.depth
+            );
+            println!(
+                "METRIC halfgcd_second_col_fixed_depth_d{}_exact_tail_bounded_plus_two_width_mean={exact_tail_bounded_plus_two_mean:.3}",
+                row.depth
+            );
+            println!(
+                "METRIC halfgcd_second_col_fixed_depth_d{}_exact_tail_bounded_plus_two_width_p99={exact_tail_bounded_plus_two_p99}",
+                row.depth
+            );
+            println!(
                 "METRIC halfgcd_second_col_fixed_depth_d{}_noscan_tail_bounded_barrel_mean={noscan_tail_bounded_mean:.3}",
                 row.depth
             );
@@ -5071,6 +5115,12 @@ mod tests {
             "METRIC halfgcd_second_col_fixed_depth_exact_tail_bounded_barrel_fitting_rows={exact_tail_bounded_fitting_rows}"
         );
         println!(
+            "METRIC halfgcd_second_col_fixed_depth_exact_tail_bounded_plus_one_width_fitting_rows={exact_tail_bounded_plus_one_fitting_rows}"
+        );
+        println!(
+            "METRIC halfgcd_second_col_fixed_depth_exact_tail_bounded_plus_two_width_fitting_rows={exact_tail_bounded_plus_two_fitting_rows}"
+        );
+        println!(
             "METRIC halfgcd_second_col_fixed_depth_noscan_tail_bounded_barrel_fitting_rows={noscan_tail_bounded_fitting_rows}"
         );
         println!(
@@ -5104,6 +5154,14 @@ mod tests {
         assert!(
             exact_tail_bounded_fitting_rows > 0,
             "bounded tail barrel no longer closes the fixed-depth sampled gap"
+        );
+        assert!(
+            exact_tail_bounded_plus_one_fitting_rows > 0,
+            "fixed-depth tail fallback cannot even afford one extra width pass"
+        );
+        assert_eq!(
+            exact_tail_bounded_plus_two_fitting_rows, 0,
+            "fixed-depth tail fallback has enough room for a generic two-width selector; revisit priority"
         );
         assert!(
             noscan_fitting_rows > 0,

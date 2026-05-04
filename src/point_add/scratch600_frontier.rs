@@ -301,7 +301,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "halfgcd_second_column_full_block_endpoint_rank_decoder_opening",
             scratch_bits: 539,
             charged_toffoli: None,
-            blocker: "the outgoing endpoint value can be compressed to a two-bit branch rank per active b32 block: exact n10/n12/n14/n16/n17 toys have at most 4 compatible endpoint/pattern branches per local key, and the secp rank-source projection is 2659620 (-40380). This improves the raw endpoint-state margin, but it still needs a phase-clean local rank decoder and branch cleanup; a generic row scan is still too tight if paid per application",
+            blocker: "the outgoing endpoint value can be compressed to a two-bit branch rank per active b32 block: exact n10/n12/n14/n16/n17 toys have at most 4 compatible endpoint/pattern branches per local key, and each coefficient lane has at most two outgoing carry values. The secp rank-source projection is 2659620 (-40380). This improves the raw endpoint-state margin, but exact toys still have coupled non-cartesian endpoint sets (n17=216 keys, largest=227), so independent carry decoders are not enough; it still needs a phase-clean joint local rank decoder and branch cleanup",
         },
         Candidate {
             name: "halfgcd_second_column_zero_row_id_noactive_floor",
@@ -2197,6 +2197,14 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         8_680isize;
     let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_two_app_gap =
         23_020isize;
+    let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_c0_variants =
+        2usize;
+    let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_c1_variants =
+        2usize;
+    let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_non_cartesian =
+        227usize;
+    let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_n17_non_cartesian =
+        216usize;
     let halfgcd_second_col_joint_signed_binary_active_degree_n14 = 13usize;
     let halfgcd_second_col_joint_signed_binary_active_density_n14 = 8_194usize;
     let halfgcd_second_col_joint_signed_binary_active_positions_n14 = 15usize;
@@ -3705,6 +3713,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_margin={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_margin}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_one_roundtrip_slack={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_one_roundtrip_slack}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_two_app_gap={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_two_app_gap}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_c0_variants={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_c0_variants}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_c1_variants={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_c1_variants}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_non_cartesian={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_non_cartesian}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_n17_non_cartesian={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_n17_non_cartesian}");
     println!("METRIC scratch600_halfgcd_second_col_joint_signed_binary_active_degree_n14={halfgcd_second_col_joint_signed_binary_active_degree_n14}");
     println!("METRIC scratch600_halfgcd_second_col_joint_signed_binary_active_density_n14={halfgcd_second_col_joint_signed_binary_active_density_n14}");
     println!("METRIC scratch600_halfgcd_second_col_joint_signed_binary_active_positions_n14={halfgcd_second_col_joint_signed_binary_active_positions_n14}");
@@ -5289,7 +5301,15 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
                 == 40_380
             && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_one_roundtrip_slack
                 > halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_table_one_roundtrip_slack
-            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_two_app_gap > 0,
+            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_two_app_gap > 0
+            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_c0_variants
+                == 2
+            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_c1_variants
+                == 2
+            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_largest_non_cartesian
+                == 227
+            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_split_n17_non_cartesian
+                == 216,
         "full block-pattern endpoint decoder opening changed; revisit half-GCD block parser"
     );
     assert!(

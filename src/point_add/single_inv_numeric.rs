@@ -10621,6 +10621,142 @@ mod tests {
     }
 
     #[test]
+    fn half_gcd_full_block_endpoint_rank_splits_by_coeff_carry_in_toys() {
+        // A two-bit arbitrary rank is still a decoder table unless those bits
+        // have carry meaning.  Check the stronger structural premise: for each
+        // local key, the compatible outgoing endpoints use at most two carry
+        // values in each coefficient lane.  Non-cartesian keys still need a
+        // joint decoder, but the side channel can be treated as two local
+        // branch bits rather than a four-bit raw state.
+        use std::collections::{BTreeMap, BTreeSet};
+
+        fn local_bits(
+            x0: SignedMagU512ForHalfGcdTest,
+            x1: SignedMagU512ForHalfGcdTest,
+            block_idx: usize,
+            block: usize,
+        ) -> u128 {
+            let mut word = 0u128;
+            let base = block_idx * block;
+            for offset in 0..block {
+                let bit = base + offset;
+                let b0 = if bit >= 512 {
+                    0
+                } else {
+                    ((x0.mag >> bit).as_limbs()[0] & 1) as u128
+                };
+                let b1 = if bit >= 512 {
+                    0
+                } else {
+                    ((x1.mag >> bit).as_limbs()[0] & 1) as u128
+                };
+                word |= b0 << (2 * offset);
+                word |= b1 << (2 * offset + 1);
+            }
+            word
+        }
+        let endpoint_state = |block_idx: usize, block_start_states: &[u8]| -> u8 {
+            block_start_states
+                .get(block_idx + 1)
+                .copied()
+                .unwrap_or(4)
+        };
+
+        let cases = [
+            (10usize, 1_021u32, 2usize),
+            (12usize, 4_093u32, 3usize),
+            (14usize, 16_381u32, 4usize),
+            (16usize, 65_521u32, 4usize),
+            (17usize, 65_537u32, 5usize),
+        ];
+        let mut largest_c0_variants = 0usize;
+        let mut largest_c1_variants = 0usize;
+        let mut largest_non_cartesian = 0usize;
+        let mut n17_non_cartesian = 0usize;
+        for &(toy_n, toy_p, toy_block) in &cases {
+            type LocalKey = (usize, u8, u128);
+            let toy_depth = (toy_n / 4).max(1);
+            let mut endpoint_rows = BTreeMap::<LocalKey, BTreeSet<u8>>::new();
+            for x in 1..toy_p {
+                let (b, d) = halfgcd_second_column_after_fixed_depth_for_test(
+                    U256::from(x as u64),
+                    U256::from(toy_p as u64),
+                    toy_depth,
+                );
+                let (_, _, _, _, _, _, _, digit_patterns, block_start_states) =
+                    halfgcd_signed_two_coeff_apply_block_active_trace_for_test(
+                        b, d, toy_block,
+                    );
+                for (block_idx, &pattern) in digit_patterns.iter().enumerate() {
+                    if pattern == 0 {
+                        continue;
+                    }
+                    let key = (
+                        block_idx,
+                        block_start_states[block_idx],
+                        local_bits(b, d, block_idx, toy_block),
+                    );
+                    endpoint_rows
+                        .entry(key)
+                        .or_default()
+                        .insert(endpoint_state(block_idx, &block_start_states));
+                }
+            }
+
+            let mut max_c0_variants = 0usize;
+            let mut max_c1_variants = 0usize;
+            let mut max_endpoint_variants = 0usize;
+            let mut non_cartesian_keys = 0usize;
+            for endpoints in endpoint_rows.values() {
+                let c0s = endpoints.iter().map(|&state| state / 3).collect::<BTreeSet<_>>();
+                let c1s = endpoints.iter().map(|&state| state % 3).collect::<BTreeSet<_>>();
+                max_c0_variants = max_c0_variants.max(c0s.len());
+                max_c1_variants = max_c1_variants.max(c1s.len());
+                max_endpoint_variants = max_endpoint_variants.max(endpoints.len());
+                non_cartesian_keys += (endpoints.len() != c0s.len() * c1s.len()) as usize;
+            }
+            println!("METRIC halfgcd_full_block_endpoint_rank_split_toy_n{toy_n}_local_keys={}", endpoint_rows.len());
+            println!("METRIC halfgcd_full_block_endpoint_rank_split_toy_n{toy_n}_max_c0_variants={max_c0_variants}");
+            println!("METRIC halfgcd_full_block_endpoint_rank_split_toy_n{toy_n}_max_c1_variants={max_c1_variants}");
+            println!("METRIC halfgcd_full_block_endpoint_rank_split_toy_n{toy_n}_max_endpoint_variants={max_endpoint_variants}");
+            println!("METRIC halfgcd_full_block_endpoint_rank_split_toy_n{toy_n}_non_cartesian_keys={non_cartesian_keys}");
+            eprintln!(
+                "half-GCD endpoint split toy n{toy_n}: keys={}, max_c0={max_c0_variants}, max_c1={max_c1_variants}, max_endpoint={max_endpoint_variants}, non_cartesian={non_cartesian_keys}",
+                endpoint_rows.len()
+            );
+
+            largest_c0_variants = largest_c0_variants.max(max_c0_variants);
+            largest_c1_variants = largest_c1_variants.max(max_c1_variants);
+            largest_non_cartesian = largest_non_cartesian.max(non_cartesian_keys);
+            if toy_n == 17 {
+                n17_non_cartesian = non_cartesian_keys;
+            }
+        }
+        println!(
+            "METRIC halfgcd_full_block_endpoint_rank_split_largest_c0_variants={largest_c0_variants}"
+        );
+        println!(
+            "METRIC halfgcd_full_block_endpoint_rank_split_largest_c1_variants={largest_c1_variants}"
+        );
+        println!(
+            "METRIC halfgcd_full_block_endpoint_rank_split_largest_non_cartesian_keys={largest_non_cartesian}"
+        );
+
+        assert!(
+            largest_c0_variants <= 2 && largest_c1_variants <= 2,
+            "endpoint rank no longer splits into one branch bit per coefficient"
+        );
+        assert!(
+            largest_non_cartesian > 0,
+            "endpoint branch sets became cartesian; build independent carry decoders"
+        );
+        assert_eq!(
+            n17_non_cartesian, 216,
+            "n17 endpoint split coupling changed; update branch decoder ledger"
+        );
+    }
+
+    #[test]
     fn half_gcd_full_block_endpoint_table_floor_needs_algorithmic_decoder() {
         // Endpoint state reopens the full-block code, but only barely.  A
         // generic coherent table over endpoint keys is already at the margin

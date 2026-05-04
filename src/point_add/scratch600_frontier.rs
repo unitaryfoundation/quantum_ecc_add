@@ -130,6 +130,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             blocker: "optimistic Solinas history-carry scale model is gate-shaped, but the actual k22 split multihalve chunk peaks at 822q; even granting one reusable 256-bit lane remains 159 scratch bits over Google, and naive overlap is 1078 scratch",
         },
         Candidate {
+            name: "plusminus_unary_google663_existing_controlled_parser",
+            scratch_bits: 650,
+            charged_toffoli: Some(3_509_916),
+            blocker: "unary k-stream fits the 663 scratch allowance on samples, but charging existing controlled add/double/halve primitives gives a 3509916 p99 point-add projection, 809916 over target before direction/sign/cleanup sidecars",
+        },
+        Candidate {
             name: "centered_euclid_raw_q_stream_without_parser",
             scratch_bits: 592,
             charged_toffoli: None,
@@ -1509,6 +1515,11 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_block_parser_align_support_max_span = 20usize;
     let plusminus_raw_scratch = 564usize;
     let plusminus_unary_scratch_p99 = 640usize;
+    let plusminus_unary_controlled_scratch_max = 650usize;
+    let plusminus_unary_controlled_primitive_ccx = 1_280usize;
+    let plusminus_unary_controlled_pointadd_p99 = 3_509_916usize;
+    let plusminus_unary_controlled_gap_p99 =
+        plusminus_unary_controlled_pointadd_p99 as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let plusminus_parser_over_strict = plusminus_unary_scratch_p99 - STRICT_SCRATCH;
     let plusminus_scaled_slack_scratch_max = 517usize;
     let plusminus_scaled_solinas_projected_max = 2_230_850usize;
@@ -3019,6 +3030,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_block_parser_align_support_max_span={direct_restoring_final_block_parser_align_support_max_span}");
     println!("METRIC scratch600_plusminus_raw_scratch_bits={plusminus_raw_scratch}");
     println!("METRIC scratch600_plusminus_unary_scratch_p99={plusminus_unary_scratch_p99}");
+    println!("METRIC scratch600_plusminus_unary_controlled_scratch_max={plusminus_unary_controlled_scratch_max}");
+    println!("METRIC scratch600_plusminus_unary_controlled_primitive_ccx={plusminus_unary_controlled_primitive_ccx}");
+    println!("METRIC scratch600_plusminus_unary_controlled_pointadd_p99={plusminus_unary_controlled_pointadd_p99}");
+    println!("METRIC scratch600_plusminus_unary_controlled_gap_p99_to_2700k={plusminus_unary_controlled_gap_p99}");
     println!("METRIC scratch600_plusminus_parser_over_strict_bits={plusminus_parser_over_strict}");
     println!("METRIC scratch600_plusminus_scaled_slack_scratch_max={plusminus_scaled_slack_scratch_max}");
     println!("METRIC scratch600_plusminus_scaled_solinas_projected_max={plusminus_scaled_solinas_projected_max}");
@@ -3435,6 +3450,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         "centered exact-parity clean BY replay changed; revisit whether exact parity cleanup can be promoted"
     );
     assert!(centered_parser_over_strict > 0 && plusminus_parser_over_strict > 0, "raw streams must not be counted before parser cost");
+    assert!(
+        plusminus_unary_controlled_scratch_max <= GOOGLE_LOW_QUBIT_SCRATCH
+            && plusminus_unary_controlled_primitive_ccx == 1_280
+            && plusminus_unary_controlled_gap_p99 > 800_000,
+        "plus-minus unary stream can now be wired with existing controlled primitives; promote the Google663 route"
+    );
     assert!(
         plusminus_active_quantum_gap_to_2700k > 50_000_000,
         "plus-minus active-chain quantum-control blocker changed; revisit physical integration"

@@ -40,6 +40,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             blocker: "smaller w=1/2/4 lowword windows do not rescue the consumed-high update; best w4 projection is 1670270 CCX over target before matrix selection and q-history cleanup",
         },
         Candidate {
+            name: "by_centered_exactparity_fast_signed_clean_replay",
+            scratch_bits: 2_200,
+            charged_toffoli: Some(5_878_716),
+            blocker: "one clean 560-step replay body is 2618000 CCX at 2720q; exact parity cleanup alone exceeds the per-DIV budget and two clean DIVs project 3178716 over target",
+        },
+        Candidate {
             name: "partial_prefix32_qoffset_lowword_model",
             scratch_bits: 542,
             charged_toffoli: None,
@@ -206,6 +212,15 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let by_tiny_consumed_high_gap_to_2700k =
         by_tiny_consumed_high_optimistic_pointadd as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let by_tiny_consumed_high_max_peak_q = 3_916usize;
+    let by_centered_exactparity_clean_replay_ccx = 2_618_000usize;
+    let by_centered_exactparity_clean_peak_q = 2_720usize;
+    let by_centered_exactparity_clean_scratch_bits = 2_200usize;
+    let by_centered_exactparity_clean_per_div_budget =
+        (GOOGLE_LOW_QUBIT_TOFFOLI - 642_716usize) / 2;
+    let by_centered_exactparity_two_clean_div_projection = 5_878_716usize;
+    let by_centered_exactparity_two_clean_div_gap =
+        by_centered_exactparity_two_clean_div_projection as isize
+            - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let centered_raw_scratch = 592usize;
     let centered_boundary_scratch_p99 = 710usize;
     let centered_parser_over_strict = centered_boundary_scratch_p99 - STRICT_SCRATCH;
@@ -612,6 +627,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_by_tiny_consumed_high_optimistic_pointadd={by_tiny_consumed_high_optimistic_pointadd}");
     println!("METRIC scratch600_by_tiny_consumed_high_gap_to_2700k={by_tiny_consumed_high_gap_to_2700k}");
     println!("METRIC scratch600_by_tiny_consumed_high_max_peak_q={by_tiny_consumed_high_max_peak_q}");
+    println!("METRIC scratch600_by_centered_exactparity_clean_replay_ccx={by_centered_exactparity_clean_replay_ccx}");
+    println!("METRIC scratch600_by_centered_exactparity_clean_peak_q={by_centered_exactparity_clean_peak_q}");
+    println!("METRIC scratch600_by_centered_exactparity_clean_scratch_bits={by_centered_exactparity_clean_scratch_bits}");
+    println!("METRIC scratch600_by_centered_exactparity_clean_per_div_budget={by_centered_exactparity_clean_per_div_budget}");
+    println!("METRIC scratch600_by_centered_exactparity_two_clean_div_projection={by_centered_exactparity_two_clean_div_projection}");
+    println!("METRIC scratch600_by_centered_exactparity_two_clean_div_gap_to_2700k={by_centered_exactparity_two_clean_div_gap}");
     println!("METRIC scratch600_centered_raw_scratch_bits={centered_raw_scratch}");
     println!("METRIC scratch600_centered_boundary_scratch_p99={centered_boundary_scratch_p99}");
     println!("METRIC scratch600_centered_parser_over_strict_bits={centered_parser_over_strict}");
@@ -932,6 +953,14 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && by_tiny_consumed_high_gap_to_2700k > 1_000_000
             && by_tiny_consumed_high_max_peak_q > GOOGLE_LOW_QUBIT_SCRATCH,
         "tiny-window consumed high-state BY selector should stay demoted until a fused low-peak update exists"
+    );
+    assert!(
+        by_centered_exactparity_clean_replay_ccx
+            > by_centered_exactparity_clean_per_div_budget
+            && by_centered_exactparity_clean_peak_q < 2_800
+            && by_centered_exactparity_clean_scratch_bits > GOOGLE_LOW_QUBIT_SCRATCH
+            && by_centered_exactparity_two_clean_div_gap > 3_000_000,
+        "centered exact-parity clean BY replay changed; revisit whether exact parity cleanup can be promoted"
     );
     assert!(centered_parser_over_strict > 0 && plusminus_parser_over_strict > 0, "raw streams must not be counted before parser cost");
     assert!(

@@ -10943,6 +10943,24 @@ mod tests {
             );
             emit_centered_signed_clear_parity_after_inverse_for_test(&mut b, &r, &s, odd[i], parity[i]);
         }
+        let ccx = count_ccx(&b.ops);
+        let peak = b.peak_qubits;
+        const NON_DIV_SCAFFOLD: usize = 642_716;
+        const GOOGLE_LOW_QUBIT_TOFFOLI: usize = 2_700_000;
+        let per_div_budget = (GOOGLE_LOW_QUBIT_TOFFOLI - NON_DIV_SCAFFOLD) / 2;
+        let two_clean_div_projection = NON_DIV_SCAFFOLD + 2 * ccx;
+        eprintln!(
+            "BY centered exact-parity/fast-signed full clean budget: ccx={ccx}, peak={peak}q, per_div_budget={per_div_budget}, two_clean_div_projection={two_clean_div_projection}"
+        );
+        assert!(peak < 2_800, "centered exact-parity clean replay no longer fits the current qubit cap");
+        assert!(
+            ccx > per_div_budget,
+            "exact-parity clean replay now fits a one-DIV low-qubit budget; revisit BY promotion"
+        );
+        assert!(
+            two_clean_div_projection > GOOGLE_LOW_QUBIT_TOFFOLI,
+            "two clean centered BY DIVs now fit the low-qubit target; revisit BY promotion"
+        );
         let num_qubits = b.next_qubit as usize;
         let num_bits = b.next_bit as usize;
         let ops = b.ops;

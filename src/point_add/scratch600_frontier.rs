@@ -169,13 +169,13 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_low_branch_digit_mixed4to8_floor",
             scratch_bits: 663,
             charged_toffoli: Some(2_643_614),
-            blocker: "low-candidate branch-as-final-digit lower bound clears binary lookup by 56386, high_q=low_q+1 on the sample set, and a 23-CCX branch digit toy is Bennett-clean; superseded by the alignment-only parser floor, but still needs full reverse-decoder integration",
+            blocker: "low-candidate branch-as-final-digit lower bound clears binary lookup by 56386, high_q=low_q+1 on the sample set, and a 23-CCX branch digit toy is Bennett-clean; but the hidden high/low branch is not locally recoverable: exact n14 still has 1068 collisions after granting det-low8, row signs, decoded q sign, step, and low-width/alignment metadata",
         },
         Candidate {
             name: "direct_centered_restoring_final_low_branch_align_only_prefix_tree_floor",
             scratch_bits: 580,
             charged_toffoli: None,
-            blocker: "branch-as-final-digit removes branch symbols from the parser stream; low-alignment block2 fits 580 scratch and prefix-tree node floor projects 2593870, but this raw row excludes support-weighted selected add/sub and variable-support decoder integration; delta-coded alignment is worse after charging prev state, with 702 p99 / 739 max scratch and 366 missing holdout symbols",
+            blocker: "branch-as-final-digit removes branch symbols from the parser stream; low-alignment block2 fits 580 scratch and prefix-tree node floor projects 2593870, but this raw row excludes support-weighted selected add/sub and variable-support decoder integration; delta-coded alignment is worse after charging prev state, with 702 p99 / 739 max scratch and 366 missing holdout symbols; exact high-branch recovery still collides under det-low8 plus signs/width metadata",
         },
         Candidate {
             name: "direct_centered_restoring_final_low_branch_weighted_prefix_span_floor",
@@ -193,7 +193,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_mixed4to8_joint_binary_floor",
             scratch_bits: 663,
             charged_toffoli: Some(2_693_369),
-            blocker: "joint block-pattern binary-depth floor would clear 2.7M by 6631 at 663 scratch, but assumes a phase-clean block-rank decoder; exact n14 rank parity is degree 14 and 8098/16384 dense, all 12 individual rank bits stay high-degree with min density 5196/16384, cheap sign/determinant xor branch recovery still misses 25324/89008 exact toy rows, selective adjacent-pair grouping saves only 26.9 of 1084.9 needed, and arbitrary full-scan support is 68058 rows and misses by 498777",
+            blocker: "joint block-pattern binary-depth floor would clear 2.7M by 6631 at 663 scratch, but assumes a phase-clean block-rank decoder; exact n14 rank parity is degree 14 and 8098/16384 dense, all 12 individual rank bits stay high-degree with min density 5196/16384, cheap sign/determinant xor branch recovery still misses 25324/89008 exact toy rows and det-low8 plus signs/width metadata still has 1068 collisions, selective adjacent-pair grouping saves only 26.9 of 1084.9 needed, and arbitrary full-scan support is 68058 rows and misses by 498777",
         },
         Candidate {
             name: "direct_centered_restoring_final_mixed67_huffman_floor",
@@ -602,6 +602,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_reverse_coeff_high_branch_sign_formula_best_mismatches_n14 =
         25_324usize;
     let direct_restoring_final_reverse_coeff_high_branch_sign_formula_best_mask_n14 = 11usize;
+    let direct_restoring_final_reverse_coeff_high_branch_det_low8_collisions_n14 = 1_068usize;
+    let direct_restoring_final_reverse_coeff_high_branch_det_low8_states_n14 = 2_227usize;
+    let direct_restoring_final_reverse_coeff_high_branch_det_low8_max_mult_n14 = 2usize;
     let direct_restoring_final_reverse_coeff_candidates_max_q_bits_n14 = 14usize;
     let direct_restoring_final_reverse_coeff_candidates_max_coeff_abs_bits_n14 = 14usize;
     let direct_restoring_final_low_branch_adjacent_transitions_n14 = 105_388usize;
@@ -2248,6 +2251,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_reverse_coeff_high_branch_sign_formula_high_n14={direct_restoring_final_reverse_coeff_high_branch_sign_formula_high_n14}");
     println!("METRIC scratch600_direct_restoring_final_reverse_coeff_high_branch_sign_formula_best_mismatches_n14={direct_restoring_final_reverse_coeff_high_branch_sign_formula_best_mismatches_n14}");
     println!("METRIC scratch600_direct_restoring_final_reverse_coeff_high_branch_sign_formula_best_mask_n14={direct_restoring_final_reverse_coeff_high_branch_sign_formula_best_mask_n14}");
+    println!("METRIC scratch600_direct_restoring_final_reverse_coeff_high_branch_det_low8_collisions_n14={direct_restoring_final_reverse_coeff_high_branch_det_low8_collisions_n14}");
+    println!("METRIC scratch600_direct_restoring_final_reverse_coeff_high_branch_det_low8_states_n14={direct_restoring_final_reverse_coeff_high_branch_det_low8_states_n14}");
+    println!("METRIC scratch600_direct_restoring_final_reverse_coeff_high_branch_det_low8_max_mult_n14={direct_restoring_final_reverse_coeff_high_branch_det_low8_max_mult_n14}");
     println!("METRIC scratch600_direct_restoring_final_reverse_coeff_candidates_max_q_bits_n14={direct_restoring_final_reverse_coeff_candidates_max_q_bits_n14}");
     println!("METRIC scratch600_direct_restoring_final_reverse_coeff_candidates_max_coeff_abs_bits_n14={direct_restoring_final_reverse_coeff_candidates_max_coeff_abs_bits_n14}");
     println!("METRIC scratch600_direct_restoring_final_low_branch_adjacent_transitions_n14={direct_restoring_final_low_branch_adjacent_transitions_n14}");
@@ -3644,8 +3650,11 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
                 == direct_restoring_final_reverse_coeff_candidates_high_n14
             && direct_restoring_final_reverse_coeff_high_branch_sign_formula_best_mismatches_n14
                 > 0
-            && direct_restoring_final_reverse_coeff_high_branch_sign_formula_best_mask_n14 > 0,
-        "cheap sign/determinant branch formula now works; promote metadata deletion"
+            && direct_restoring_final_reverse_coeff_high_branch_sign_formula_best_mask_n14 > 0
+            && direct_restoring_final_reverse_coeff_high_branch_det_low8_collisions_n14 > 0
+            && direct_restoring_final_reverse_coeff_high_branch_det_low8_states_n14 > 0
+            && direct_restoring_final_reverse_coeff_high_branch_det_low8_max_mult_n14 == 2,
+        "cheap local high-branch recovery now works; promote metadata deletion"
     );
     assert!(
         direct_restoring_final_low_branch_adjacent_transitions_n14

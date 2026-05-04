@@ -22298,6 +22298,51 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_restoring_final_high_branch_low_det_residue_still_collides() {
+        // Branch-as-final-digit only helps if the low/high coefficient branch
+        // can be recovered without a full selector stream.  Give an arbitrary
+        // local lookup more than the affine sign test: public step, low
+        // determinant residues up to 8 bits, live row signs, decoded quotient
+        // sign, and low-candidate width/alignment metadata.  Remaining toy
+        // collisions mean the branch bit is not a small local residue channel.
+        let cases = [(8usize, 251u16), (10, 1021), (12, 4093), (14, 16381)];
+        let residue_bits = [2usize, 4, 6, 8];
+        let mut largest_k8_collisions = 0usize;
+        let mut largest_k8_states = 0usize;
+        for &(n, p) in &cases {
+            for &k in &residue_bits {
+                let (collisions, ambiguous, states, high_count, max_mult) =
+                    direct_centered_restoring_final_high_branch_low_det_residue_collision_stats(
+                        p, k,
+                    );
+                eprintln!(
+                    "direct-centered restoring-final high branch low-det residue: n={n}, k={k}, collisions={collisions}, ambiguous={ambiguous}, states={states}, high={high_count}, max_mult={max_mult}"
+                );
+                if n == 14 {
+                    println!("METRIC centered_direct_restoring_final_high_branch_det_low{k}_collisions_n14={collisions}");
+                    println!("METRIC centered_direct_restoring_final_high_branch_det_low{k}_states_n14={states}");
+                    println!("METRIC centered_direct_restoring_final_high_branch_det_low{k}_max_mult_n14={max_mult}");
+                }
+                if k == 8 {
+                    largest_k8_collisions = largest_k8_collisions.max(collisions);
+                    largest_k8_states = largest_k8_states.max(states);
+                }
+                assert!(ambiguous > 0 && high_count > 0, "toy field did not exercise high/low branch");
+                assert!(
+                    max_mult > 1,
+                    "local residue image unexpectedly became injective"
+                );
+            }
+        }
+        println!("METRIC centered_direct_restoring_final_high_branch_det_low8_largest_collisions={largest_k8_collisions}");
+        println!("METRIC centered_direct_restoring_final_high_branch_det_low8_largest_states={largest_k8_states}");
+        assert!(
+            largest_k8_collisions > 0,
+            "det-low8 plus signs and low-width metadata recovers the high branch; promote branch-final decoder"
+        );
+    }
+
+    #[test]
     fn direct_centered_restoring_final_low_branch_is_exact_adjacent_on_toys() {
         // Branch-as-final-digit depends on the high candidate being exactly
         // low_q+1 whenever the coefficient reverse decoder is ambiguous.  The
@@ -34927,6 +34972,99 @@ mod tests {
         }
         let high_count = rows.iter().filter(|&&(target, _)| target != 0).count();
         (rows.len(), high_count, best_mismatches, best_mask)
+    }
+
+    fn direct_centered_restoring_final_high_branch_low_det_residue_collision_stats(
+        p: u16,
+        residue_bits: usize,
+    ) -> (usize, usize, usize, usize, usize) {
+        use std::collections::BTreeMap;
+
+        let bit_len = |z: u128| -> usize {
+            if z == 0 {
+                0
+            } else {
+                128usize - z.leading_zeros() as usize
+            }
+        };
+        let modulus = 1i128 << residue_bits;
+        let mut image: BTreeMap<
+            (usize, i128, bool, bool, bool, bool, bool, usize, usize, usize),
+            u8,
+        > = BTreeMap::new();
+        let mut ambiguous = 0usize;
+        let mut high_count = 0usize;
+        for x in 1..p {
+            let mut u = p as i128;
+            let mut v = x as i128;
+            let mut coeff_u = 0i128;
+            let mut coeff_v = 1i128;
+            let mut step = 0usize;
+            while v != 0 {
+                let abs_u = u.unsigned_abs();
+                let abs_v = v.unsigned_abs();
+                let adjusted = abs_u + (abs_v >> 1);
+                let q_abs = adjusted / abs_v;
+                let q_signed = if (u < 0) ^ (v < 0) {
+                    -(q_abs as i128)
+                } else {
+                    q_abs as i128
+                };
+                let next_v = u - q_signed * v;
+                let next_coeff_v = coeff_u - q_signed * coeff_v;
+                if coeff_u != 0 {
+                    let denom = coeff_v.unsigned_abs();
+                    let next_abs = next_coeff_v.unsigned_abs();
+                    assert!(denom > 0, "high-branch denominator vanished");
+                    assert!(next_abs > 0, "high-branch numerator underflowed");
+                    let low_numer = next_abs - 1;
+                    let high_numer = next_abs + denom - 1;
+                    let low_q_abs = low_numer / denom;
+                    let high_q_abs = high_numer / denom;
+                    if low_q_abs != high_q_abs {
+                        let target = (q_abs == high_q_abs) as u8;
+                        assert!(
+                            q_abs == low_q_abs || q_abs == high_q_abs,
+                            "actual quotient escaped high/low candidates"
+                        );
+                        let det = v * next_coeff_v - next_v * coeff_v;
+                        let det_residue = det.rem_euclid(modulus);
+                        let decoded_q_neg = !((next_coeff_v < 0) ^ (coeff_v < 0));
+                        let denom_width = bit_len(denom);
+                        let low_width = bit_len(low_numer).max(denom_width).max(1);
+                        let low_alignment = bit_len(low_numer).saturating_sub(denom_width);
+                        *image
+                            .entry((
+                                step,
+                                det_residue,
+                                coeff_v < 0,
+                                next_coeff_v < 0,
+                                v < 0,
+                                next_v < 0,
+                                decoded_q_neg,
+                                low_alignment,
+                                denom_width,
+                                low_width,
+                            ))
+                            .or_insert(0) |= 1u8 << target;
+                        ambiguous += 1;
+                        high_count += target as usize;
+                    }
+                }
+                u = v;
+                v = next_v;
+                coeff_u = coeff_v;
+                coeff_v = next_coeff_v;
+                step += 1;
+            }
+        }
+        let collisions = image.values().filter(|&&mask| mask == 0b11).count();
+        let max_mult = image
+            .values()
+            .map(|mask| mask.count_ones() as usize)
+            .max()
+            .unwrap_or(0);
+        (collisions, ambiguous, image.len(), high_count, max_mult)
     }
 
     fn direct_centered_restoring_final_low_branch_adjacent_stats(

@@ -26365,6 +26365,181 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_restoring_final_low_branch_prefix_support_weighted_span_floor() {
+        // The max-span block2 toy is too adversarial if its 24-wide support is
+        // charged against every prefix node.  Reprice the same materialized
+        // selected-add/sub shape with the actual per-step low-branch alignment
+        // supports: each step pays for its own support size and max alignment.
+        // This is still a lower bound, but it tells whether the span24 miss is
+        // a global blocker or only a worst-support outlier.
+        use std::collections::BTreeMap;
+
+        const MAX_STEPS: usize = 260;
+        const SAMPLES: usize = 8192;
+        const COEFF_W: usize = 3;
+        const PREFIX_TREE_GAP_TO_2700K: f64 = -106_130.130;
+        const SPAN24_TOY_RATIO: f64 = 10.375;
+        const PARSER_OVER_NODE_ROUNDTRIP: f64 = 3.5;
+        const RATIO_BUDGET: f64 = 10.228_508;
+        let p = SECP256K1_P;
+        let mut rng = 0xd1ce_c0ef_a119_0301u64;
+        let mut traces = Vec::with_capacity(SAMPLES);
+        let mut align_by_step = vec![BTreeMap::<usize, usize>::new(); MAX_STEPS];
+
+        for _ in 0..SAMPLES {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(p));
+            let mut v = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(x));
+            let mut coeff_u = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut coeff_v = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut alignments = Vec::new();
+
+            while !v.mag.is_zero() {
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let q_direct = adjusted / v.mag;
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_direct);
+                let next_v = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                let qv_coeff = signed_mul_mag_for_halfgcd_test(coeff_v, q_neg, q_direct);
+                let next_coeff_v = signed_add_for_halfgcd_test(
+                    coeff_u,
+                    signed_neg_for_halfgcd_test(qv_coeff),
+                );
+
+                let denom = coeff_v.mag;
+                assert!(
+                    !denom.is_zero(),
+                    "restoring-final coefficient denominator vanished"
+                );
+                let low_numer = if coeff_u.mag.is_zero() {
+                    next_coeff_v.mag
+                } else {
+                    assert!(
+                        !next_coeff_v.mag.is_zero(),
+                        "restoring-final adjusted coefficient numerator underflow"
+                    );
+                    next_coeff_v.mag - U512::from(1u64)
+                };
+                let alignment = u512_bit_len_for_halfgcd_test(low_numer)
+                    .saturating_sub(u512_bit_len_for_halfgcd_test(denom));
+                alignments.push(alignment);
+
+                u = v;
+                v = next_v;
+                coeff_u = coeff_v;
+                coeff_v = next_coeff_v;
+            }
+
+            assert!(
+                alignments.len() < MAX_STEPS,
+                "trace exceeded alignment model"
+            );
+            for (step, &alignment) in alignments.iter().enumerate() {
+                *align_by_step[step].entry(alignment).or_insert(0) += 1;
+            }
+            traces.push(alignments);
+        }
+
+        let mean_usize = |rows: &[usize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let p99_usize = |rows: &mut Vec<usize>| -> usize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+
+        let mut prefix_node_rows = Vec::with_capacity(SAMPLES);
+        let mut materialized_digit_rows = Vec::with_capacity(SAMPLES);
+        let mut span24_symbol_rows = Vec::with_capacity(SAMPLES);
+        let mut support_noncontig_steps = 0usize;
+        let mut support_max_span = 0usize;
+        let mut support_max_symbols = 0usize;
+        for counts in &align_by_step {
+            if counts.is_empty() {
+                continue;
+            }
+            let min_symbol = *counts.keys().next().unwrap();
+            let max_symbol = *counts.keys().next_back().unwrap();
+            let span = max_symbol - min_symbol + 1;
+            support_max_span = support_max_span.max(span);
+            support_max_symbols = support_max_symbols.max(counts.len());
+            support_noncontig_steps += (span != counts.len()) as usize;
+        }
+        for alignments in &traces {
+            let mut prefix_nodes = 0usize;
+            let mut materialized_digits = 0usize;
+            let mut span24_symbols = 0usize;
+            for (step, _) in alignments.iter().enumerate() {
+                let counts = &align_by_step[step];
+                let support = counts.len();
+                if support <= 1 {
+                    continue;
+                }
+                let max_symbol = *counts.keys().next_back().unwrap();
+                prefix_nodes += support - 1;
+                materialized_digits += 2 * support * COEFF_W + max_symbol + COEFF_W - 1;
+                span24_symbols += (max_symbol + 1 == support_max_span) as usize;
+            }
+            prefix_node_rows.push(prefix_nodes);
+            materialized_digit_rows.push(materialized_digits);
+            span24_symbol_rows.push(span24_symbols);
+        }
+
+        let prefix_node_mean = mean_usize(&prefix_node_rows);
+        let materialized_digit_mean = mean_usize(&materialized_digit_rows);
+        let span24_symbol_mean = mean_usize(&span24_symbol_rows);
+        let prefix_node_p99 = p99_usize(&mut prefix_node_rows);
+        let materialized_digit_p99 = p99_usize(&mut materialized_digit_rows);
+        let span24_symbol_p99 = p99_usize(&mut span24_symbol_rows);
+        let arithmetic_over_node_roundtrip =
+            materialized_digit_mean / (2.0 * prefix_node_mean);
+        let weighted_total_over_node_roundtrip =
+            PARSER_OVER_NODE_ROUNDTRIP + arithmetic_over_node_roundtrip;
+        let weighted_scaled_gap = PREFIX_TREE_GAP_TO_2700K
+            + 8.0 * prefix_node_mean * (weighted_total_over_node_roundtrip - 1.0);
+        let span24_scaled_gap = PREFIX_TREE_GAP_TO_2700K
+            + 8.0 * prefix_node_mean * (SPAN24_TOY_RATIO - 1.0);
+        let weighted_projection = 2_700_000.0 + weighted_scaled_gap;
+
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_mean={prefix_node_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_p99={prefix_node_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_materialized_digit_mean={materialized_digit_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_materialized_digit_p99={materialized_digit_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_arithmetic_over_node_roundtrip={arithmetic_over_node_roundtrip:.6}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_total_over_node_roundtrip={weighted_total_over_node_roundtrip:.6}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_ratio_budget={RATIO_BUDGET:.6}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_gap_to_2700k={weighted_scaled_gap:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_projected_toffoli={weighted_projection:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_span24_uniform_gap_to_2700k={span24_scaled_gap:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_mean={span24_symbol_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_p99={span24_symbol_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_support_noncontig_steps={support_noncontig_steps}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_support_max_span={support_max_span}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols={support_max_symbols}");
+        eprintln!(
+            "Direct-centered low-branch weighted prefix span floor: prefix_nodes={prefix_node_mean:.1}, materialized={materialized_digit_mean:.1}, ratio={weighted_total_over_node_roundtrip:.3}x, budget={RATIO_BUDGET:.3}x, gap={weighted_scaled_gap:.1}, span24_uniform_gap={span24_scaled_gap:.1}, span24_symbols={span24_symbol_mean:.1}/{span24_symbol_p99}"
+        );
+
+        assert!(
+            (prefix_node_mean - 1_437.531).abs() < 0.01,
+            "low-branch prefix node floor drifted; refresh frontier constants"
+        );
+        assert_eq!(support_max_span, 24, "low-branch support max span drifted");
+        assert!(
+            span24_scaled_gap > 0.0,
+            "uniform span24 charge no longer kills the prefix path"
+        );
+        assert!(
+            weighted_scaled_gap < -20_000.0
+                && weighted_total_over_node_roundtrip < RATIO_BUDGET,
+            "support-weighted selected-add/sub floor no longer preserves the low-branch margin"
+        );
+    }
+
+    #[test]
     fn direct_centered_restoring_final_block_joint_rank_bits_are_dense() {
         // The mixed 4..8 block-joint binary-depth floor only helps if the block
         // pattern rank can be decoded phase-cleanly.  Treat the exact toy

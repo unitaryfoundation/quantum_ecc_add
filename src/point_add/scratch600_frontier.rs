@@ -163,7 +163,13 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_low_branch_align_only_prefix_tree_floor",
             scratch_bits: 580,
             charged_toffoli: None,
-            blocker: "branch-as-final-digit removes branch symbols from the parser stream; low-alignment block2 fits 580 scratch and prefix-tree node floor projects 2593870, but a span-24 noncontiguous selected add/sub roundtrip toy misses by 1685; coherent per-leaf span tapering is worse, 63 CCX/add versus 55 materialize+full-add and a 13185 scaled miss",
+            blocker: "branch-as-final-digit removes branch symbols from the parser stream; low-alignment block2 fits 580 scratch and prefix-tree node floor projects 2593870, but this raw row excludes support-weighted selected add/sub and variable-support decoder integration",
+        },
+        Candidate {
+            name: "direct_centered_restoring_final_low_branch_weighted_prefix_span_floor",
+            scratch_bits: 580,
+            charged_toffoli: None,
+            blocker: "support-weighted selected add/sub raises the low-branch prefix projection to 2666583 with 33417 margin; uniform span24 still misses by 1685 if charged globally, so promotion needs a phase-clean variable-support prefix decoder and full reverse integration",
         },
         Candidate {
             name: "direct_centered_restoring_final_mixed4to8_joint_binary_floor",
@@ -726,6 +732,28 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_restore_cases = 0usize;
     let direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_history_cases = 0usize;
     let direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_phase_cases = 0usize;
+    let direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_mean =
+        1_437.531f64;
+    let direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_p99 = 1_568usize;
+    let direct_restoring_final_low_branch_prefix_support_weighted_materialized_digit_mean =
+        10_990.740f64;
+    let direct_restoring_final_low_branch_prefix_support_weighted_materialized_digit_p99 =
+        12_023usize;
+    let direct_restoring_final_low_branch_prefix_support_weighted_arithmetic_over_node_roundtrip =
+        3.822_784f64;
+    let direct_restoring_final_low_branch_prefix_support_weighted_total_over_node_roundtrip =
+        7.322_784f64;
+    let direct_restoring_final_low_branch_prefix_support_weighted_ratio_budget = 10.228_508f64;
+    let direct_restoring_final_low_branch_prefix_support_weighted_gap = -33_416.553f64;
+    let direct_restoring_final_low_branch_prefix_support_weighted_projected_toffoli =
+        2_666_583.447f64;
+    let direct_restoring_final_low_branch_prefix_support_weighted_span24_uniform_gap =
+        1_684.686f64;
+    let direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_mean = 1.000f64;
+    let direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_p99 = 1usize;
+    let direct_restoring_final_low_branch_prefix_support_weighted_support_noncontig_steps = 61usize;
+    let direct_restoring_final_low_branch_prefix_support_weighted_support_max_span = 24usize;
+    let direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols = 18usize;
     let direct_restoring_final_coeff_decoder_alignment_degree_n14 = 13usize;
     let direct_restoring_final_coeff_decoder_alignment_density_n14 = 8_278usize;
     let direct_restoring_final_coeff_decoder_alignment_max_n14 = 13usize;
@@ -1724,6 +1752,21 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_restore_cases={direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_restore_cases}");
     println!("METRIC scratch600_direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_history_cases={direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_history_cases}");
     println!("METRIC scratch600_direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_phase_cases={direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_phase_cases}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_mean={direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_p99={direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_p99}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_materialized_digit_mean={direct_restoring_final_low_branch_prefix_support_weighted_materialized_digit_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_materialized_digit_p99={direct_restoring_final_low_branch_prefix_support_weighted_materialized_digit_p99}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_arithmetic_over_node_roundtrip={direct_restoring_final_low_branch_prefix_support_weighted_arithmetic_over_node_roundtrip:.6}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_total_over_node_roundtrip={direct_restoring_final_low_branch_prefix_support_weighted_total_over_node_roundtrip:.6}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_ratio_budget={direct_restoring_final_low_branch_prefix_support_weighted_ratio_budget:.6}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_gap_to_2700k={direct_restoring_final_low_branch_prefix_support_weighted_gap:.3}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_projected_toffoli={direct_restoring_final_low_branch_prefix_support_weighted_projected_toffoli:.3}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_span24_uniform_gap_to_2700k={direct_restoring_final_low_branch_prefix_support_weighted_span24_uniform_gap:.3}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_mean={direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_p99={direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_p99}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_support_noncontig_steps={direct_restoring_final_low_branch_prefix_support_weighted_support_noncontig_steps}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_support_max_span={direct_restoring_final_low_branch_prefix_support_weighted_support_max_span}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols={direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_degree_n14={direct_restoring_final_coeff_decoder_alignment_degree_n14}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_density_n14={direct_restoring_final_coeff_decoder_alignment_density_n14}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_max_n14={direct_restoring_final_coeff_decoder_alignment_max_n14}");
@@ -2629,6 +2672,26 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_history_cases == 0
             && direct_restoring_final_prefix_block2_span24_roundtrip_toy_dirty_phase_cases == 0,
         "span24 prefix selected-addsub accounting changed; revisit low-branch range integration"
+    );
+    assert!(
+        (direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_mean
+            - direct_restoring_final_low_branch_align_only_prefix_tree_node_floor_mean)
+            .abs()
+            < 0.01
+            && direct_restoring_final_low_branch_prefix_support_weighted_prefix_node_p99
+                == direct_restoring_final_low_branch_align_only_prefix_tree_node_floor_p99
+            && direct_restoring_final_low_branch_prefix_support_weighted_total_over_node_roundtrip
+                < direct_restoring_final_low_branch_prefix_support_weighted_ratio_budget
+            && direct_restoring_final_low_branch_prefix_support_weighted_gap < -30_000.0
+            && direct_restoring_final_low_branch_prefix_support_weighted_projected_toffoli
+                < 2_670_000.0
+            && direct_restoring_final_low_branch_prefix_support_weighted_span24_uniform_gap > 0.0
+            && direct_restoring_final_low_branch_prefix_support_weighted_span24_symbol_p99 == 1
+            && direct_restoring_final_low_branch_prefix_support_weighted_support_noncontig_steps
+                == direct_restoring_final_low_branch_align_only_support_noncontig_steps
+            && direct_restoring_final_low_branch_prefix_support_weighted_support_max_span
+                == direct_restoring_final_low_branch_align_only_support_max_span,
+        "support-weighted low-branch span accounting changed; revisit prefix decoder promotion"
     );
     assert!(
         direct_restoring_final_coeff_decoder_alignment_degree_n14 + 1 >= 14

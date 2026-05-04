@@ -4120,6 +4120,110 @@ mod tests {
         )
     }
 
+    fn halfgcd_signed_two_coeff_apply_joint_signed_binary_floor_for_test(
+        x0: SignedMagU512ForHalfGcdTest,
+        x1: SignedMagU512ForHalfGcdTest,
+    ) -> (usize, usize, usize, usize, usize, usize) {
+        const MOD_ADD_FAST_CCX: usize = 1024;
+        const MOD_DOUBLE_FAST_CCX: usize = 255;
+        const MOD_HALVE_FAST_CCX: usize = 255;
+        const FIELD_BITS: usize = 256;
+
+        #[derive(Clone, Copy)]
+        struct Row {
+            cost: usize,
+            occupied: usize,
+            digits: usize,
+        }
+
+        fn better(candidate: Row, old: Option<Row>) -> Option<Row> {
+            match old {
+                Some(row)
+                    if (row.cost, row.digits, row.occupied)
+                        <= (candidate.cost, candidate.digits, candidate.occupied) =>
+                {
+                    Some(row)
+                }
+                _ => Some(candidate),
+            }
+        }
+
+        let top0 = u512_bit_len_for_halfgcd_test(x0.mag).saturating_sub(1);
+        let top1 = u512_bit_len_for_halfgcd_test(x1.mag).saturating_sub(1);
+        let top = top0.max(top1);
+        let max_bits = u512_bit_len_for_halfgcd_test(x0.mag)
+            .max(u512_bit_len_for_halfgcd_test(x1.mag))
+            .max(1);
+        let bit_at = |x: U512, bit: usize| -> i8 {
+            if bit >= 512 {
+                0
+            } else {
+                ((x >> bit).as_limbs()[0] & 1) as i8
+            }
+        };
+
+        let mut dp = [[None::<Row>; 3]; 3];
+        dp[1][1] = Some(Row { cost: 0, occupied: 0, digits: 0 });
+        for bit in 0..(max_bits + 3) {
+            let b0 = bit_at(x0.mag, bit);
+            let b1 = bit_at(x1.mag, bit);
+            let mut next = [[None::<Row>; 3]; 3];
+            for c0i in 0..3 {
+                for c1i in 0..3 {
+                    let Some(row) = dp[c0i][c1i] else { continue; };
+                    let c0 = c0i as i8 - 1;
+                    let c1 = c1i as i8 - 1;
+                    for d0 in -1i8..=1 {
+                        let s0 = b0 + c0 - d0;
+                        if s0.rem_euclid(2) != 0 {
+                            continue;
+                        }
+                        let nc0 = s0 / 2;
+                        if !(-1..=1).contains(&nc0) {
+                            continue;
+                        }
+                        for d1 in -1i8..=1 {
+                            let s1 = b1 + c1 - d1;
+                            if s1.rem_euclid(2) != 0 {
+                                continue;
+                            }
+                            let nc1 = s1 / 2;
+                            if !(-1..=1).contains(&nc1) {
+                                continue;
+                            }
+                            let digit_count = (d0 != 0) as usize + (d1 != 0) as usize;
+                            let occupied = digit_count != 0;
+                            let delta_cost = if occupied { MOD_ADD_FAST_CCX } else { 0 }
+                                + 2 * FIELD_BITS * digit_count;
+                            let candidate = Row {
+                                cost: row.cost + delta_cost,
+                                occupied: row.occupied + occupied as usize,
+                                digits: row.digits + digit_count,
+                            };
+                            let slot = &mut next[(nc0 + 1) as usize][(nc1 + 1) as usize];
+                            *slot = better(candidate, *slot);
+                        }
+                    }
+                }
+            }
+            dp = next;
+        }
+        let row = dp[1][1].expect("joint signed-binary carry did not drain");
+        let app_floor = top * (MOD_DOUBLE_FAST_CCX + MOD_HALVE_FAST_CCX)
+            + row.occupied * MOD_ADD_FAST_CCX;
+        let compact_source_floor = 2 * FIELD_BITS * row.digits;
+        let missing_active_floor = 2 * FIELD_BITS * row.digits;
+        let table_row_floor = row.occupied * 8;
+        (
+            app_floor,
+            compact_source_floor,
+            missing_active_floor,
+            table_row_floor,
+            row.occupied,
+            row.digits,
+        )
+    }
+
     fn halfgcd_signed_two_coeff_apply_cost_for_test(
         x0: SignedMagU512ForHalfGcdTest,
         x1: SignedMagU512ForHalfGcdTest,
@@ -7233,6 +7337,285 @@ mod tests {
                 && best_wnaf_compact_missing_active_mean > best_wnaf_compact_active_slack_oneway
                 && best_wnaf_compact_source_product_mean > best_wnaf_compact_table_row_mean,
             "compact odd-digit wNAF still has enough active-predicate budget; build a recoder-cleanup toy"
+        );
+    }
+
+    #[test]
+    fn half_gcd_second_column_joint_signed_binary_still_needs_active_predicate() {
+        // Independent compact NAF is blocked by its omitted active/zero
+        // predicate.  Try a structural replacement: jointly recode the two
+        // second-column coefficients with a signed-binary DP that minimizes
+        // selected-add rows plus sign/source products.  This can only become a
+        // route if the active predicate it still omits fits the new slack.
+        const SCAFFOLD_AFTER_DIV: usize = 642_716;
+        const TAIL_REPLAY_PER_BIT_CCX: usize = 587;
+        const TARGET: f64 = 2_700_000.0;
+        const DEPTH: usize = 64;
+        let p = SECP256K1_P;
+        let samples = 4096usize;
+        let mut rng = 0x5ec0_0001_d7ba_0064u64;
+        let exact_barrel_bits = 8usize;
+        let mut independent_compact_pointadds = Vec::with_capacity(samples);
+        let mut joint_compact_pointadds = Vec::with_capacity(samples);
+        let mut joint_full_active_pointadds = Vec::with_capacity(samples);
+        let mut independent_missing_active_rows = Vec::with_capacity(samples);
+        let mut joint_missing_active_rows = Vec::with_capacity(samples);
+        let mut joint_app_rows = Vec::with_capacity(samples);
+        let mut joint_compact_source_rows = Vec::with_capacity(samples);
+        let mut joint_table_rows = Vec::with_capacity(samples);
+        let mut joint_occupied_rows = Vec::with_capacity(samples);
+        let mut joint_digit_rows = Vec::with_capacity(samples);
+        let mut independent_first64 = 0isize;
+        let mut joint_first64 = 0isize;
+        let mut joint_full_active_first64 = 0isize;
+
+        for sample_idx in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = p;
+            let mut v = x;
+            let mut b = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut d = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut residual_digit_width = 0usize;
+            let mut coeff_digit_width = 0usize;
+            let mut final_fix_width = 0usize;
+            let mut residual_width_sum = 0usize;
+            let mut coeff_width_sum = 0usize;
+            let mut decoder_digit = 0usize;
+            let mut decoder_final_fix = 0usize;
+            let mut decoder_width_sum = 0usize;
+            let mut prefix_steps = 0usize;
+
+            while prefix_steps < DEPTH && !v.is_zero() {
+                let q = u / v;
+                let (digits, prefinal_rem, prefinal_q) =
+                    nonrestoring_prefinal_signed_digits_for_centered_test(
+                        u512_from_u256_for_halfgcd_test(u),
+                        u512_from_u256_for_halfgcd_test(v),
+                    );
+                let final_negative = prefinal_rem.neg && !prefinal_rem.mag.is_zero();
+                let floor_q = if final_negative {
+                    prefinal_q - U512::from(1u64)
+                } else {
+                    prefinal_q
+                };
+                assert_eq!(floor_q, u512_from_u256_for_halfgcd_test(q));
+                let width = u256_bit_len(u).max(u256_bit_len(v)).max(1);
+                let coeff_width = u512_bit_len_for_halfgcd_test(b.mag)
+                    .max(u512_bit_len_for_halfgcd_test(d.mag))
+                    .max(1)
+                    + 1;
+                residual_digit_width += digits.len() * width.saturating_sub(1);
+                final_fix_width += (2 * width).saturating_sub(1)
+                    + (2 * coeff_width).saturating_sub(1);
+                residual_width_sum += width;
+                coeff_width_sum += coeff_width;
+
+                let mut coeff_acc = b;
+                for &(digit_neg, sh) in &digits {
+                    let term = signed_mul_mag_for_halfgcd_test(
+                        d,
+                        digit_neg,
+                        U512::from(1u64) << sh,
+                    );
+                    let next = signed_add_for_halfgcd_test(
+                        coeff_acc,
+                        signed_neg_for_halfgcd_test(term),
+                    );
+                    let op_width = u512_bit_len_for_halfgcd_test(coeff_acc.mag)
+                        .max(u512_bit_len_for_halfgcd_test(term.mag))
+                        .max(u512_bit_len_for_halfgcd_test(next.mag))
+                        .max(1)
+                        + 1;
+                    coeff_digit_width += op_width.saturating_sub(1);
+                    coeff_acc = next;
+                }
+                if final_negative {
+                    coeff_acc = signed_add_for_halfgcd_test(coeff_acc, d);
+                }
+
+                let rem = u - q * v;
+                let nb = d;
+                let nd = signed_sub_scaled_for_halfgcd_test(b, q, d);
+                assert_eq!(coeff_acc, nd, "joint signed-binary prefix replay mismatch");
+
+                let numer = if b.mag.is_zero() {
+                    nd.mag
+                } else {
+                    nd.mag - U512::from(1u64)
+                };
+                let denom = nb.mag;
+                assert!(!denom.is_zero(), "joint signed-binary decoder denominator vanished");
+                assert_eq!(
+                    numer / denom,
+                    u512_from_u256_for_halfgcd_test(q),
+                    "joint signed-binary decoder reverse quotient mismatch"
+                );
+                let (decoder_digits, decoder_prefinal_rem, decoder_prefinal_q) =
+                    nonrestoring_prefinal_signed_digits_for_centered_test(numer, denom);
+                let decoder_final_negative =
+                    decoder_prefinal_rem.neg && !decoder_prefinal_rem.mag.is_zero();
+                let decoder_floor_q = if decoder_final_negative {
+                    decoder_prefinal_q - U512::from(1u64)
+                } else {
+                    decoder_prefinal_q
+                };
+                assert_eq!(decoder_floor_q, u512_from_u256_for_halfgcd_test(q));
+                let decoder_width = u512_bit_len_for_halfgcd_test(numer)
+                    .max(u512_bit_len_for_halfgcd_test(denom))
+                    .max(1);
+                decoder_digit += decoder_digits.len() * decoder_width.saturating_sub(1);
+                decoder_final_fix += (2 * decoder_width).saturating_sub(1);
+                decoder_width_sum += decoder_width;
+
+                u = v;
+                v = rem;
+                b = nb;
+                d = nd;
+                prefix_steps += 1;
+            }
+
+            let mut tail_payload = 0usize;
+            let mut tail_extract_floor = 0usize;
+            let mut tail_logbarrel_floor = 0usize;
+            let mut tu = u;
+            let mut tv = v;
+            while !tv.is_zero() {
+                let q = tu / tv;
+                let q_bits = u256_bit_len(q);
+                let tail_width = u256_bit_len(tu).max(u256_bit_len(tv)).max(1);
+                tail_payload += q_bits;
+                tail_extract_floor += q_bits * 3 * tail_width + tail_width;
+                tail_logbarrel_floor += tail_width * exact_barrel_bits;
+                let rem = tu - q * tv;
+                tu = tv;
+                tv = rem;
+            }
+            assert_eq!(tu, U256::from(1u64), "joint signed-binary fixed-depth tail missed gcd 1");
+
+            let exact_extraction = residual_digit_width
+                + coeff_digit_width
+                + final_fix_width
+                + (residual_width_sum + coeff_width_sum) * (exact_barrel_bits + 1);
+            let replay = tail_payload * TAIL_REPLAY_PER_BIT_CCX;
+            let decoder_exact =
+                decoder_digit + decoder_final_fix + decoder_width_sum * (exact_barrel_bits + 1);
+            let tail_exact = tail_extract_floor + tail_logbarrel_floor;
+            let without_app = SCAFFOLD_AFTER_DIV as isize
+                + 2 * (replay + 2 * exact_extraction) as isize
+                + 4 * decoder_exact as isize
+                + 4 * tail_exact as isize;
+
+            let (
+                independent_app,
+                _independent_table_rows,
+                independent_source_full,
+                _independent_positions,
+            ) = halfgcd_signed_two_coeff_apply_wnaf_window_floor_for_test(b, d, 2);
+            let independent_digits = independent_source_full / (2 * 256 * 2);
+            let independent_compact_source = 2 * 256 * independent_digits;
+            let independent_missing_active =
+                independent_source_full - independent_compact_source;
+            let independent_compact_pointadd =
+                without_app + 2 * (independent_app + independent_compact_source) as isize;
+
+            let (
+                joint_app,
+                joint_compact_source,
+                joint_missing_active,
+                joint_table_row_floor,
+                joint_occupied,
+                joint_digits,
+            ) = halfgcd_signed_two_coeff_apply_joint_signed_binary_floor_for_test(b, d);
+            let joint_compact_pointadd =
+                without_app + 2 * (joint_app + joint_compact_source) as isize;
+            let joint_full_active_pointadd = without_app
+                + 2 * (joint_app + joint_compact_source + joint_missing_active) as isize;
+
+            if sample_idx < 64 {
+                independent_first64 += independent_compact_pointadd;
+                joint_first64 += joint_compact_pointadd;
+                joint_full_active_first64 += joint_full_active_pointadd;
+            }
+            independent_compact_pointadds.push(independent_compact_pointadd);
+            joint_compact_pointadds.push(joint_compact_pointadd);
+            joint_full_active_pointadds.push(joint_full_active_pointadd);
+            independent_missing_active_rows.push(independent_missing_active);
+            joint_missing_active_rows.push(joint_missing_active);
+            joint_app_rows.push(joint_app);
+            joint_compact_source_rows.push(joint_compact_source);
+            joint_table_rows.push(joint_table_row_floor);
+            joint_occupied_rows.push(joint_occupied);
+            joint_digit_rows.push(joint_digits);
+        }
+
+        let mean_isize = |rows: &[isize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let mean_usize = |rows: &[usize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let p99_isize = |rows: &mut Vec<isize>| -> isize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+        let p99_usize = |rows: &mut Vec<usize>| -> usize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+        let independent_mean = mean_isize(&independent_compact_pointadds);
+        let joint_mean = mean_isize(&joint_compact_pointadds);
+        let joint_full_active_mean = mean_isize(&joint_full_active_pointadds);
+        let independent_first64 = independent_first64 as f64 / 64.0;
+        let joint_first64 = joint_first64 as f64 / 64.0;
+        let joint_full_active_first64 = joint_full_active_first64 as f64 / 64.0;
+        let independent_missing_active_mean = mean_usize(&independent_missing_active_rows);
+        let joint_missing_active_mean = mean_usize(&joint_missing_active_rows);
+        let joint_app_mean = mean_usize(&joint_app_rows);
+        let joint_compact_source_mean = mean_usize(&joint_compact_source_rows);
+        let joint_table_row_mean = mean_usize(&joint_table_rows);
+        let joint_occupied_mean = mean_usize(&joint_occupied_rows);
+        let joint_digit_mean = mean_usize(&joint_digit_rows);
+        let joint_active_slack_oneway = ((TARGET - joint_mean) / 2.0).max(0.0);
+        let joint_improvement_mean = independent_mean - joint_mean;
+        let joint_p99 = p99_isize(&mut joint_compact_pointadds);
+        let joint_full_active_p99 = p99_isize(&mut joint_full_active_pointadds);
+        let joint_missing_active_p99 = p99_usize(&mut joint_missing_active_rows);
+        let joint_digits_p99 = p99_usize(&mut joint_digit_rows);
+        let joint_occupied_p99 = p99_usize(&mut joint_occupied_rows);
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_independent_compact_mean={independent_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_independent_compact_first64={independent_first64:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_compact_mean={joint_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_compact_first64={joint_first64:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_compact_p99={joint_p99}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_full_active_mean={joint_full_active_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_full_active_first64={joint_full_active_first64:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_full_active_p99={joint_full_active_p99}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_improvement_mean={joint_improvement_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_independent_missing_active_mean={independent_missing_active_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_missing_active_mean={joint_missing_active_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_missing_active_p99={joint_missing_active_p99}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_active_slack_oneway={joint_active_slack_oneway:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_app_mean={joint_app_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_compact_source_mean={joint_compact_source_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_table_row_mean={joint_table_row_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_occupied_mean={joint_occupied_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_occupied_p99={joint_occupied_p99}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_digits_mean={joint_digit_mean:.3}");
+        println!("METRIC halfgcd_fixed_depth64_joint_signed_binary_joint_digits_p99={joint_digits_p99}");
+        eprintln!(
+            "half-GCD fixed-depth64 joint signed-binary recoder: independent={independent_mean:.1}, joint={joint_mean:.1}, full_active={joint_full_active_mean:.1}, improvement={joint_improvement_mean:.1}, missing_active={joint_missing_active_mean:.1}, slack={joint_active_slack_oneway:.1}, app={joint_app_mean:.1}, compact_source={joint_compact_source_mean:.1}, occupied={joint_occupied_mean:.1}, digits={joint_digit_mean:.1}"
+        );
+        assert!(
+            joint_mean < independent_mean && joint_mean < TARGET,
+            "joint signed-binary recoding no longer improves the compact NAF floor"
+        );
+        assert!(
+            joint_missing_active_mean > joint_active_slack_oneway
+                && joint_full_active_mean > TARGET,
+            "joint signed-binary active predicate now fits; promote a real recoder/cleanup toy"
         );
     }
 

@@ -3454,6 +3454,97 @@ mod tests {
         (degree, density, max_coeff_bits, max_pair)
     }
 
+    fn half_gcd_second_column_static_window_wnaf_parity_anf_stats(
+        n: usize,
+        p: u16,
+        window: usize,
+        phase_mask: usize,
+    ) -> (usize, usize, usize, usize) {
+        let size = 1usize << n;
+        let depth = (n / 4).max(1);
+        let code_bits = window;
+        let pair_mask = (1usize << (2 * code_bits)) - 1;
+        let sign_base = 1usize << (window - 1);
+        let encode_digit = |digit: i64| -> usize {
+            if digit == 0 {
+                0
+            } else if digit > 0 {
+                digit as usize
+            } else {
+                sign_base + (-digit) as usize
+            }
+        };
+        let to_signed_mag = |value: i128| -> SignedMagU512ForHalfGcdTest {
+            smag_for_halfgcd_test(
+                value < 0,
+                U512::from(value.unsigned_abs() as u64),
+            )
+        };
+        let mut anf = vec![0u8; size];
+        let mut max_positions = 0usize;
+        let mut max_pair = 0usize;
+        for x in 1..p {
+            let mut u = p as i128;
+            let mut v = x as i128;
+            let mut b = 0i128;
+            let mut d = 1i128;
+            let mut prefix_steps = 0usize;
+            while prefix_steps < depth && v != 0 {
+                let q = u / v;
+                let rem = u - q * v;
+                (b, d) = (d, b - q * d);
+                u = v;
+                v = rem;
+                prefix_steps += 1;
+            }
+            let digits0 = halfgcd_wnaf_digit_positions_for_test(to_signed_mag(b), window);
+            let digits1 = halfgcd_wnaf_digit_positions_for_test(to_signed_mag(d), window);
+            let max_pos = digits0
+                .iter()
+                .chain(digits1.iter())
+                .map(|&(pos, _)| pos)
+                .max()
+                .unwrap_or(0);
+            max_positions = max_positions.max(max_pos + 1);
+            let mut idx0 = 0usize;
+            let mut idx1 = 0usize;
+            let mut parity = 0u8;
+            for pos in 0..=max_pos {
+                let mut d0 = 0i64;
+                let mut d1 = 0i64;
+                if idx0 < digits0.len() && digits0[idx0].0 == pos {
+                    d0 = digits0[idx0].1;
+                    idx0 += 1;
+                }
+                if idx1 < digits1.len() && digits1[idx1].0 == pos {
+                    d1 = digits1[idx1].1;
+                    idx1 += 1;
+                }
+                if d0 != 0 || d1 != 0 {
+                    let pair = encode_digit(d0) | (encode_digit(d1) << code_bits);
+                    max_pair = max_pair.max(pair);
+                    parity ^= ((pair & phase_mask & pair_mask).count_ones() as u8) & 1;
+                }
+            }
+            anf[x as usize] = parity;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&v| v != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| if v != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density, max_positions, max_pair)
+    }
+
     fn half_gcd_second_column_static_window_support_stats(
         n: usize,
         p: u16,
@@ -4349,6 +4440,40 @@ mod tests {
             assert!(max_coeff_bits + 2 >= n / 2, "toy second-column coefficients stopped reaching wide windows");
             assert!(degree + 2 >= n, "static-window coefficient parity unexpectedly low degree");
             assert!(density > table / 4, "static-window coefficient parity unexpectedly sparse");
+        }
+    }
+
+    #[test]
+    fn half_gcd_second_column_wnaf_window_selectors_are_not_generic_mbu_clean() {
+        // Sparse signed-window recoding lowers the source-product selector
+        // floor, but the table-only escape still needs clean row/path controls.
+        // Probe the recoded row bits directly: representative wNAF row parities
+        // are dense on toy fields, so generic MBUC is still not the missing
+        // structural selector.
+        let cases = [
+            (8usize, 251u16, 2usize, 0b1011usize),
+            (10usize, 1021u16, 2usize, 0b1001usize),
+            (12usize, 4093u16, 3usize, 0b10_1011usize),
+            (14usize, 16381u16, 3usize, 0b10_0101usize),
+        ];
+        for &(n, p, window, phase_mask) in &cases {
+            let (degree, density, max_positions, max_pair) =
+                half_gcd_second_column_static_window_wnaf_parity_anf_stats(
+                    n, p, window, phase_mask,
+                );
+            let table = 1usize << n;
+            eprintln!(
+                "half-GCD second-column wNAF-window parity ANF: n={n}, window={window}, mask={phase_mask:#b}, degree={degree}, density={density}/{table}, max_positions={max_positions}, max_pair={max_pair}"
+            );
+            if n == 14 {
+                println!("METRIC halfgcd_second_col_static_window_wnaf_mbu_degree_n14={degree}");
+                println!("METRIC halfgcd_second_col_static_window_wnaf_mbu_density_n14={density}");
+                println!("METRIC halfgcd_second_col_static_window_wnaf_mbu_max_positions_n14={max_positions}");
+                println!("METRIC halfgcd_second_col_static_window_wnaf_mbu_max_pair_n14={max_pair}");
+            }
+            assert!(max_positions + 2 >= n / 2, "toy wNAF coefficients stopped reaching wide positions");
+            assert!(degree + 2 >= n, "wNAF coefficient parity unexpectedly low degree");
+            assert!(density > table / 4, "wNAF coefficient parity unexpectedly sparse");
         }
     }
 

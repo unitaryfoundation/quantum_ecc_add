@@ -217,7 +217,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "halfgcd_second_column_fixed_depth64_static_window_floor",
             scratch_bits: 515,
             charged_toffoli: Some(2_748_271),
-            blocker: "joint static-window scan improves to w6 average 2749506 (+49506) under the exact bit-product floor; sparse signed wNAF recoding lowers the source-product floor to 2748271 (+48271), but still needs selector/recoder cost below 86824 one-way instead of 99575; table-only w4 would be 2559198, but it still lacks a structural selector, generic cleanup is dense at n14, and exact toy support leaves 27/28 coefficient bit positions live",
+            blocker: "joint static-window scan improves to w6 average 2749506 (+49506) under the exact bit-product floor; sparse signed wNAF recoding lowers the source-product floor to 2748271 (+48271), but still needs selector/recoder cost below 86824 one-way instead of 99575; table-only w4 would be 2559198, but it still lacks a structural selector, generic cleanup is dense at n14 (plain 8194/16384, wNAF 8162/16384), and exact toy support leaves 27/28 coefficient bit positions live",
         },
         Candidate {
             name: "folded_kaliski_one_pair_plus_required_sidecar",
@@ -1002,6 +1002,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let halfgcd_second_col_static_window_mbu_density_n14 = 8_194usize;
     let halfgcd_second_col_static_window_mbu_max_coeff_bits_n14 = 14usize;
     let halfgcd_second_col_static_window_mbu_max_pair_n14 = 63usize;
+    let halfgcd_second_col_static_window_wnaf_mbu_degree_n14 = 13usize;
+    let halfgcd_second_col_static_window_wnaf_mbu_density_n14 = 8_162usize;
+    let halfgcd_second_col_static_window_wnaf_mbu_max_positions_n14 = 15usize;
+    let halfgcd_second_col_static_window_wnaf_mbu_max_pair_n14 = 63usize;
     let halfgcd_second_col_static_window_support_rows_n14 = 213usize;
     let halfgcd_second_col_static_window_support_full_rows_n14 = 315usize;
     let halfgcd_second_col_static_window_support_ppm_n14 = 676_190usize;
@@ -1668,6 +1672,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_halfgcd_second_col_static_window_mbu_density_n14={halfgcd_second_col_static_window_mbu_density_n14}");
     println!("METRIC scratch600_halfgcd_second_col_static_window_mbu_max_coeff_bits_n14={halfgcd_second_col_static_window_mbu_max_coeff_bits_n14}");
     println!("METRIC scratch600_halfgcd_second_col_static_window_mbu_max_pair_n14={halfgcd_second_col_static_window_mbu_max_pair_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_static_window_wnaf_mbu_degree_n14={halfgcd_second_col_static_window_wnaf_mbu_degree_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_static_window_wnaf_mbu_density_n14={halfgcd_second_col_static_window_wnaf_mbu_density_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_static_window_wnaf_mbu_max_positions_n14={halfgcd_second_col_static_window_wnaf_mbu_max_positions_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_static_window_wnaf_mbu_max_pair_n14={halfgcd_second_col_static_window_wnaf_mbu_max_pair_n14}");
     println!("METRIC scratch600_halfgcd_second_col_static_window_support_rows_n14={halfgcd_second_col_static_window_support_rows_n14}");
     println!("METRIC scratch600_halfgcd_second_col_static_window_support_full_rows_n14={halfgcd_second_col_static_window_support_full_rows_n14}");
     println!("METRIC scratch600_halfgcd_second_col_static_window_support_ppm_n14={halfgcd_second_col_static_window_support_ppm_n14}");
@@ -2305,6 +2313,13 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && halfgcd_second_col_static_window_mbu_degree_n14 + 2 >= 14
             && halfgcd_second_col_static_window_mbu_density_n14 > (1usize << 14) / 4,
         "half-GCD static-window selector bits may be generic-MBU clean; revisit table-only route"
+    );
+    assert!(
+        halfgcd_second_col_static_window_wnaf_mbu_max_positions_n14 >= 14
+            && halfgcd_second_col_static_window_wnaf_mbu_max_pair_n14 == 63
+            && halfgcd_second_col_static_window_wnaf_mbu_degree_n14 + 2 >= 14
+            && halfgcd_second_col_static_window_wnaf_mbu_density_n14 > (1usize << 14) / 4,
+        "half-GCD wNAF static-window selector bits may be generic-MBU clean; revisit table-only route"
     );
     assert!(
         halfgcd_second_col_static_window_support_rows_n14 * 5

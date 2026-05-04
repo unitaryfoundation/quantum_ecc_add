@@ -3454,6 +3454,104 @@ mod tests {
         (degree, density, max_coeff_bits, max_pair)
     }
 
+    fn half_gcd_second_column_static_window_support_stats(
+        n: usize,
+        p: u16,
+        window: usize,
+    ) -> (usize, usize, usize, usize, usize, usize, usize, usize) {
+        let depth = (n / 4).max(1);
+        let pair_count = 1usize << (2 * window);
+        let digit_mask = (1usize << window) - 1;
+        let mut pair_supports = Vec::<Vec<bool>>::new();
+        let mut b_bit_support = Vec::<bool>::new();
+        let mut d_bit_support = Vec::<bool>::new();
+        let mut max_coeff_bits = 0usize;
+        let mut max_pair = 0usize;
+        for x in 1..p {
+            let mut u = p as i128;
+            let mut v = x as i128;
+            let mut b = 0i128;
+            let mut d = 1i128;
+            let mut prefix_steps = 0usize;
+            while prefix_steps < depth && v != 0 {
+                let q = u / v;
+                let rem = u - q * v;
+                (b, d) = (d, b - q * d);
+                u = v;
+                v = rem;
+                prefix_steps += 1;
+            }
+            let b_abs = b.unsigned_abs() as usize;
+            let d_abs = d.unsigned_abs() as usize;
+            let bit0 = usize_bit_len_for_payload_test(b_abs);
+            let bit1 = usize_bit_len_for_payload_test(d_abs);
+            let coeff_bits = bit0.max(bit1);
+            max_coeff_bits = max_coeff_bits.max(coeff_bits);
+            if b_bit_support.len() < coeff_bits {
+                b_bit_support.resize(coeff_bits, false);
+                d_bit_support.resize(coeff_bits, false);
+            }
+            for bit in 0..bit0 {
+                if ((b_abs >> bit) & 1) != 0 {
+                    b_bit_support[bit] = true;
+                }
+            }
+            for bit in 0..bit1 {
+                if ((d_abs >> bit) & 1) != 0 {
+                    d_bit_support[bit] = true;
+                }
+            }
+            let windows = if coeff_bits == 0 {
+                1
+            } else {
+                (coeff_bits + window - 1) / window
+            };
+            if pair_supports.len() < windows {
+                pair_supports.resize_with(windows, || vec![false; pair_count]);
+            }
+            for window_idx in 0..windows {
+                let pos = window_idx * window;
+                let pair = ((b_abs >> pos) & digit_mask)
+                    | (((d_abs >> pos) & digit_mask) << window);
+                max_pair = max_pair.max(pair);
+                pair_supports[window_idx][pair] = true;
+            }
+        }
+        let windows = pair_supports.len();
+        let full_rows = windows * pair_count.saturating_sub(1);
+        let support_rows = pair_supports
+            .iter()
+            .map(|rows| {
+                rows.iter()
+                    .enumerate()
+                    .filter(|&(pair, seen)| pair != 0 && *seen)
+                    .count()
+            })
+            .sum::<usize>();
+        let saturated_windows = pair_supports
+            .iter()
+            .filter(|rows| {
+                rows.iter()
+                    .enumerate()
+                    .filter(|&(pair, _)| pair != 0)
+                    .all(|(_, seen)| *seen)
+            })
+            .count();
+        let bit_support = b_bit_support.iter().filter(|&&seen| seen).count()
+            + d_bit_support.iter().filter(|&&seen| seen).count();
+        let full_bits = 2 * max_coeff_bits;
+        (
+            windows,
+            support_rows,
+            full_rows,
+            saturated_windows,
+            bit_support,
+            full_bits,
+            max_coeff_bits,
+            max_pair,
+        )
+    }
+
     fn half_gcd_second_column_prefix_reversibility_stats(
         n: usize,
         p: u16,
@@ -4173,6 +4271,64 @@ mod tests {
             assert!(max_coeff_bits + 2 >= n / 2, "toy second-column coefficients stopped reaching wide windows");
             assert!(degree + 2 >= n, "static-window coefficient parity unexpectedly low degree");
             assert!(density > table / 4, "static-window coefficient parity unexpectedly sparse");
+        }
+    }
+
+    #[test]
+    fn half_gcd_second_column_static_window_support_keeps_source_bits_dense() {
+        // Row-support pruning is the next obvious way to rescue the table-only
+        // static-window ledger.  Exact small domains leave some row-pruning
+        // room, but they still exercise almost every source coefficient-bit
+        // position, so support ranking does not remove the source-product floor.
+        let cases = [
+            (8usize, 251u16, 2usize),
+            (10usize, 1021u16, 2usize),
+            (12usize, 4093u16, 3usize),
+            (14usize, 16381u16, 3usize),
+        ];
+        for &(n, p, window) in &cases {
+            let (
+                windows,
+                support_rows,
+                full_rows,
+                saturated_windows,
+                bit_support,
+                full_bits,
+                max_coeff_bits,
+                max_pair,
+            ) = half_gcd_second_column_static_window_support_stats(n, p, window);
+            let support_ppm = support_rows * 1_000_000 / full_rows.max(1);
+            let bit_ppm = bit_support * 1_000_000 / full_bits.max(1);
+            eprintln!(
+                "half-GCD second-column static-window support: n={n}, window={window}, rows={support_rows}/{full_rows}, support_ppm={support_ppm}, saturated_windows={saturated_windows}/{windows}, bits={bit_support}/{full_bits}, bit_ppm={bit_ppm}, max_coeff_bits={max_coeff_bits}, max_pair={max_pair}"
+            );
+            if n == 14 {
+                println!("METRIC halfgcd_second_col_static_window_support_rows_n14={support_rows}");
+                println!("METRIC halfgcd_second_col_static_window_support_full_rows_n14={full_rows}");
+                println!("METRIC halfgcd_second_col_static_window_support_ppm_n14={support_ppm}");
+                println!("METRIC halfgcd_second_col_static_window_support_saturated_windows_n14={saturated_windows}");
+                println!("METRIC halfgcd_second_col_static_window_support_windows_n14={windows}");
+                println!("METRIC halfgcd_second_col_static_window_bit_support_n14={bit_support}");
+                println!("METRIC halfgcd_second_col_static_window_full_bits_n14={full_bits}");
+                println!("METRIC halfgcd_second_col_static_window_bit_support_ppm_n14={bit_ppm}");
+            }
+            assert_eq!(
+                max_pair,
+                (1usize << (2 * window)) - 1,
+                "toy coefficient windows stopped reaching the full row id"
+            );
+            assert!(
+                support_rows * 5 > full_rows * 3,
+                "static-window row support became sparse enough to revisit row pruning"
+            );
+            assert!(
+                saturated_windows > 0,
+                "static-window row support no longer saturates any exact-domain window"
+            );
+            assert!(
+                bit_support + 2 >= full_bits,
+                "static-window coefficient bits became sparse enough to revisit source products"
+            );
         }
     }
 

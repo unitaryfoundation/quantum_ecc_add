@@ -1330,3 +1330,5 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1778350427	3d3c288	4080802.000	24234820.948	2713	30486826	OK	phase attribution for secp primitive rewrite budget
 1778797460	3d3c288	4080802.000	24234820.948	2713	30486826	OK	baseline current tree before SOTA hard-piece experiments 
 1778797489	3d3c288	4080802.000	24234820.948	2713	30486826	OK	autoresearch-checks
+1778798559	6dbffb0	4079850.000	24223849.067	2713	30479940	OK	try R_SMALL_THRESHOLD=262 with bulk prefix backed off to 377 
+1778798589	6dbffb0	4079850.000	24223849.067	2713	30479940	OK	autoresearch-checks

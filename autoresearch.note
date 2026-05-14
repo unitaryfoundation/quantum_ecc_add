@@ -1,1 +1,1 @@
-baseline current tree before SOTA hard-piece experiments
+try R_SMALL_THRESHOLD=262 with bulk prefix backed off to 377

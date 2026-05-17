@@ -506,6 +506,36 @@ fn bit(c: U256, i: usize) -> bool {
     c.bit(i)
 }
 
+fn env_flag_enabled(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+        .unwrap_or(default)
+}
+
+fn point_add_karatsuba_enabled() -> bool {
+    env_flag_enabled("POINT_ADD_KARATSUBA", true)
+}
+
+fn pair1_mul1_karatsuba_enabled(n: usize) -> bool {
+    let min_n = std::env::var("POINT_ADD_KARATSUBA_MIN_N")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(256);
+    point_add_karatsuba_enabled()
+        && n >= min_n
+        && env_flag_enabled("KAL_PAIR1_MUL1_KARATSUBA", true)
+}
+
+fn direct_const_halve_enabled() -> bool {
+    // The direct constant subtract halve is very slightly lower-peak by itself,
+    // but older guarded Karatsuba attempts found that combining it with
+    // pair1_mul1 Karatsuba can hit a phase-cleanliness cliff on alternate
+    // seeds.  Prefer the revived Karatsuba win by default; both knobs remain
+    // independently overrideable for diagnostics.
+    env_flag_enabled("KAL_DIRECT_CONST_HALVE", !pair1_mul1_karatsuba_enabled(N))
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  Cuccaro ripple-carry adder
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1744,11 +1774,7 @@ fn mod_halve_inplace_fast_with_dirty(
         b.free(q_clean2[0]);
         b.free(q_clean2[1]);
         let _ = c_u64; // unused, c_low is the right value
-    } else if std::env::var("KAL_DIRECT_CONST_HALVE")
-        .ok()
-        .map(|v| v != "0")
-        .unwrap_or(true)
-    {
+    } else if direct_const_halve_enabled() {
         csub_nbit_const_direct_fast(b, v, c, ovf);
     } else {
         csub_nbit_const_fast(b, v, c, ovf);
@@ -3319,6 +3345,20 @@ fn mod_mul_write_into_zero_acc_karatsuba(
     let tmp_ext = b.alloc_qubits(2 * acc.len());
     mod_mul_write_into_zero_acc_karatsuba_with_tmp_ext(b, acc, x, y, p, &tmp_ext);
     b.free_vec(&tmp_ext);
+}
+
+fn pair1_mul1_write_into_zero_acc(
+    b: &mut B,
+    acc: &[QubitId],
+    x: &[QubitId],
+    y: &[QubitId],
+    p: U256,
+) {
+    if pair1_mul1_karatsuba_enabled(acc.len()) {
+        mod_mul_write_into_zero_acc_karatsuba(b, acc, x, y, p);
+    } else {
+        mod_mul_write_into_zero_acc_schoolbook(b, acc, x, y, p);
+    }
 }
 
 // ─── 2-level Karatsuba variants (recursive on inner half-mults) ───
@@ -9325,7 +9365,7 @@ fn build_standard_point_add(
         with_kal_inv_raw(b, &tx, p, pair1_iters, |b, inv_raw| {
             let lam_inner = b.alloc_qubits(N);
             b.set_phase("pair1_mul1");
-            mod_mul_write_into_zero_acc_schoolbook(b, &lam_inner, &ty, inv_raw, p);
+            pair1_mul1_write_into_zero_acc(b, &lam_inner, &ty, inv_raw, p);
             b.set_phase("pair1_halve");
             for _ in 0..pair1_iters {
                 mod_halve_inplace_fast(b, &lam_inner, p);

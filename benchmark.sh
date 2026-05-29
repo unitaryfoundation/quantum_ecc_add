@@ -17,11 +17,35 @@ set -euo pipefail
 # shellcheck disable=SC1091
 . "$HOME/.cargo/env" 2>/dev/null || true
 
+find_c_compiler() {
+  if [[ -n "${CC:-}" ]] && command -v "${CC}" >/dev/null 2>&1; then
+    command -v "${CC}"
+    return 0
+  fi
+
+  local candidate
+  for candidate in gcc cc clang; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      command -v "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+compiler="$(find_c_compiler || true)"
+if [[ -z "${compiler}" ]]; then
+  echo "!! no C compiler/linker found; run ./setup.sh or install gcc/clang" >&2
+  exit 1
+fi
+export CC="${compiler}"
+
 # 1. Clean slate.
 rm -f ops.bin score.json
 
 # Make sure both binaries are present (cheap rebuild — no-op if up to date).
-RUSTFLAGS='-C linker=gcc' cargo build --release --bin build_circuit --bin eval_circuit
+RUSTFLAGS="-C linker=${compiler}" cargo build --release --bin build_circuit --bin eval_circuit
 
 # 2. Run build_circuit in its own process group, then nuke the group.
 #    `setsid` puts it in a fresh pgid; `kill -KILL -<pgid>` reaches every

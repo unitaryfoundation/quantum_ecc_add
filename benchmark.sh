@@ -127,9 +127,27 @@ chmod 0777 "${ops_scratch}"   # the unprivileged sandbox uid must be able to wri
 #   - macOS: sandbox-exec (Seatbelt) with an equivalent read-only / no-network profile.
 #   - neither available: unconfined fallback (local dev only; the platform always
 #     scores in a sandbox, so this never applies to the official run).
+bwrap_via_sudo=0
 if command -v bwrap >/dev/null 2>&1; then
+  # The sandbox runs this as a non-root user, and its bwrap carries Linux file
+  # capabilities without setuid — which bwrap refuses when run non-root
+  # ("Unexpected capabilities but not setuid, old file caps config?"). Get bwrap
+  # to start unprivileged, in order of preference:
+  #   - sudo: run bwrap as root (the sandbox is provisioned with sudo). bwrap
+  #     then drops to uid 65534 with no caps for the actual run.
+  #   - else setpriv --no-new-privs: makes the kernel ignore the file caps so
+  #     bwrap takes the unprivileged user-namespace path (no sudo required).
+  #   - else plain bwrap (setuid or no-caps installs).
+  # Either way the run ends up read-only, no-network, unprivileged.
+  bw=( bwrap )
+  if [[ "$(id -u)" -ne 0 ]] && command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    bw=( sudo -n bwrap )
+    bwrap_via_sudo=1
+  elif command -v setpriv >/dev/null 2>&1; then
+    bw=( setpriv --no-new-privs bwrap )
+  fi
   run_build=(
-    bwrap
+    "${bw[@]}"
       --ro-bind / / --dev /dev --ro-bind /proc /proc
       --bind "${ops_scratch}" "${ops_scratch}" --chdir "${ops_scratch}"
       --setenv TMPDIR "${ops_scratch}"
@@ -152,13 +170,20 @@ else
 fi
 
 # Run it in its own process group, then nuke the group. `setsid` puts it in a
-# fresh pgid; `kill -KILL -<pgid>` reaches every child including double-forked
-# daemons. We trap so we always reap (and clean up the scratch dir).
+# fresh pgid; killing `-<pgid>` reaches every child including double-forked
+# daemons. When bwrap ran via sudo (root + uid-65534 children), reap via sudo so
+# we can signal them. We trap so we always reap and clean up the scratch dir.
 cleanup_pgid=""
-cleanup() {
-  if [[ -n "${cleanup_pgid}" ]]; then
+reap() {
+  [[ -n "${cleanup_pgid}" ]] || return 0
+  if [[ "${bwrap_via_sudo}" -eq 1 ]]; then
+    sudo -n kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
+  else
     kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
   fi
+}
+cleanup() {
+  reap
   if [[ -n "${ops_scratch:-}" ]]; then
     rm -rf "${ops_scratch}" 2>/dev/null || true
   fi
@@ -173,7 +198,7 @@ if command -v setsid >/dev/null 2>&1; then
   wait "${build_pid}"
   build_status=$?
   set -e
-  kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
+  reap
   cleanup_pgid=""
 else
   # Fallback: bash job control puts the background pipeline in its own pgid.
@@ -185,7 +210,7 @@ else
   wait "${build_pid}"
   build_status=$?
   set -e
-  kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
+  reap
   cleanup_pgid=""
   set +m
 fi

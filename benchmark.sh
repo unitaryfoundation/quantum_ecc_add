@@ -7,8 +7,8 @@
 #      dropped, unprivileged uid, writable only in a throwaway scratch dir
 #      (its cwd) where it emits ops.bin. Also run it in its own process group
 #      and kill the whole group on exit so a forked child cannot survive and
-#      tamper afterward. (Falls back to unconfined where bwrap is absent, e.g.
-#      local macOS dev.)
+#      tamper afterward. (Linux uses bubblewrap; macOS uses sandbox-exec; if
+#      neither is available it falls back to an unconfined local-dev run.)
 #   3. Verify ops.bin exists. If build_circuit exited early or crashed,
 #      the file is missing and we fail closed.
 #   4. Run eval_circuit (TRUSTED — never imports contestant code) which
@@ -117,11 +117,14 @@ build_circuit_bin="$(pwd)/target/release/build_circuit"
 #    copied out afterward. This stops contestant code from overwriting score.json,
 #    the trusted eval_circuit binary, or the repo sources, and from reaching the
 #    network — none of which the process-group reap below covers at run time.
-ops_scratch="$(mktemp -d)"
+ops_scratch="$(cd "$(mktemp -d)" && pwd -P)"   # resolved real path (the macOS profile needs it)
 chmod 0777 "${ops_scratch}"   # the unprivileged sandbox uid must be able to write here
 
-# Build the (possibly confined) invocation. bwrap is required in the trusted
-# sandbox (installed by setup.sh); hosts without it (macOS dev) run unconfined.
+# Build the (possibly confined) invocation:
+#   - Linux: bubblewrap (installed by setup.sh in the trusted sandbox).
+#   - macOS: sandbox-exec (Seatbelt) with an equivalent read-only / no-network profile.
+#   - neither available: unconfined fallback (local dev only; the platform always
+#     scores in a sandbox, so this never applies to the official run).
 if command -v bwrap >/dev/null 2>&1; then
   run_build=(
     bwrap
@@ -132,8 +135,16 @@ if command -v bwrap >/dev/null 2>&1; then
       --uid 65534 --gid 65534
       -- "${build_circuit_bin}"
   )
+elif [[ "$(uname -s)" == "Darwin" ]] && command -v sandbox-exec >/dev/null 2>&1; then
+  # Read-only everywhere except the scratch dir (and /dev), and no network. TMPDIR
+  # points at the scratch dir so any incidental temp writes stay inside it.
+  macos_profile="(version 1)(allow default)(deny file-write*)(allow file-write* (subpath \"${ops_scratch}\"))(allow file-write* (subpath \"/dev\"))(deny network*)"
+  run_build=(
+    sandbox-exec -p "${macos_profile}"
+      /bin/bash -c 'cd "$1" && export TMPDIR="$1" && exec "$2"' _ "${ops_scratch}" "${build_circuit_bin}"
+  )
 else
-  echo "!! bubblewrap not found; running build_circuit UNCONFINED (dev fallback)" >&2
+  echo "!! no sandbox available (bubblewrap/sandbox-exec); running build_circuit UNCONFINED (dev fallback)" >&2
   run_build=( bash -c 'cd "$1" && exec "$2"' _ "${ops_scratch}" "${build_circuit_bin}" )
 fi
 

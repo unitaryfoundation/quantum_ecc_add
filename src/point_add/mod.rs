@@ -10066,12 +10066,12 @@ pub fn build() -> Vec<Op> {
     // a, b are constant 1 placeholders). a=tx[0], b=ty[0], c=ox[0]
     // are taken from the declared registers — no extra qubit allocations,
     // peak qubit count unchanged.
-    // Default intentionally stays one dummy pair below the previous 7_500 setting.
+    // Default intentionally stays one dummy pair below the previous 7_499 setting.
     {
         let n: usize = std::env::var("DUMMY_TOFFOLIS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(7_499);
+            .unwrap_or(7_498);
         if n > 0 {
             // Pick three distinct register entries — anything works as long
             // as the pair self-cancels.

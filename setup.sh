@@ -105,6 +105,27 @@ if [[ -z "${compiler}" ]]; then
 fi
 export CC="${compiler}"
 
+# 1b. Confinement tool. benchmark.sh sandboxes the untrusted build_circuit run
+#     with bubblewrap, and runs offline, so install bwrap now. Best-effort:
+#     hosts without a supported package manager (e.g. macOS dev) fall back to an
+#     unconfined run in benchmark.sh.
+if ! command -v bwrap >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    ${SUDO} apt-get update && ${SUDO} apt-get install -y --no-install-recommends bubblewrap || true
+  elif command -v dnf >/dev/null 2>&1; then
+    ${SUDO} dnf install -y bubblewrap || true
+  elif command -v yum >/dev/null 2>&1; then
+    ${SUDO} yum install -y bubblewrap || true
+  elif command -v apk >/dev/null 2>&1; then
+    ${SUDO} apk add --no-cache bubblewrap || true
+  elif command -v pacman >/dev/null 2>&1; then
+    ${SUDO} pacman -Sy --noconfirm bubblewrap || true
+  elif command -v zypper >/dev/null 2>&1; then
+    ${SUDO} zypper --non-interactive install bubblewrap || true
+  fi
+fi
+
 # 2. Rust toolchain.
 if ! command -v cargo >/dev/null 2>&1; then
   if ! curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \

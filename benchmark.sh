@@ -3,8 +3,12 @@
 #
 #   1. Wipe stale ops.bin / score.json so a contestant cannot pre-seed them.
 #   2. Run build_circuit (UNTRUSTED — runs contestant code in src/point_add)
-#      in its own process group; on exit, kill the whole group so a forked
-#      child cannot survive and overwrite score.json after step 4.
+#      under bubblewrap: read-only filesystem, no network, all capabilities
+#      dropped, unprivileged uid, writable only in a throwaway scratch dir
+#      (its cwd) where it emits ops.bin. Also run it in its own process group
+#      and kill the whole group on exit so a forked child cannot survive and
+#      tamper afterward. (Linux uses bubblewrap; macOS uses sandbox-exec; if
+#      neither is available it falls back to an unconfined local-dev run.)
 #   3. Verify ops.bin exists. If build_circuit exited early or crashed,
 #      the file is missing and we fail closed.
 #   4. Run eval_circuit (TRUSTED — never imports contestant code) which
@@ -103,20 +107,66 @@ rm -f ops.bin score.json
 # Make sure both binaries are present (cheap rebuild — no-op if up to date).
 RUSTFLAGS="-C linker=${compiler}" cargo build --release --locked --offline --bin build_circuit --bin eval_circuit
 
-# 2. Run build_circuit in its own process group, then nuke the group.
-#    `setsid` puts it in a fresh pgid; `kill -KILL -<pgid>` reaches every
-#    child including double-forked daemons. We trap so we always reap.
-#    On macOS `setsid` is missing — fall back to `set -m` + `kill %1`.
+build_circuit_bin="$(pwd)/target/release/build_circuit"
+
+# 2. Run build_circuit (UNTRUSTED). Contestant code is compiled into this binary
+#    and runs in-process, so at run time it has the binary's privileges. Confine
+#    it: a read-only view of the whole filesystem, no network, all capabilities
+#    dropped, dropped to an unprivileged uid, and writable ONLY in a throwaway
+#    scratch dir that we make its working directory (no writable /tmp; TMPDIR
+#    points at the scratch dir, so the scratch dir is the single writable path).
+#    ops.bin is written there and copied out afterward. This stops contestant
+#    code from overwriting score.json,
+#    the trusted eval_circuit binary, or the repo sources, and from reaching the
+#    network — none of which the process-group reap below covers at run time.
+ops_scratch="$(cd "$(mktemp -d)" && pwd -P)"   # resolved real path (the macOS profile needs it)
+chmod 0777 "${ops_scratch}"   # the unprivileged sandbox uid must be able to write here
+
+# Build the (possibly confined) invocation:
+#   - Linux: bubblewrap (installed by setup.sh in the trusted sandbox).
+#   - macOS: sandbox-exec (Seatbelt) with an equivalent read-only / no-network profile.
+#   - neither available: unconfined fallback (local dev only; the platform always
+#     scores in a sandbox, so this never applies to the official run).
+if command -v bwrap >/dev/null 2>&1; then
+  run_build=(
+    bwrap
+      --ro-bind / / --dev /dev --ro-bind /proc /proc
+      --bind "${ops_scratch}" "${ops_scratch}" --chdir "${ops_scratch}"
+      --setenv TMPDIR "${ops_scratch}"
+      --unshare-user --unshare-net --unshare-ipc --unshare-uts --unshare-cgroup
+      --cap-drop ALL --new-session --die-with-parent
+      --uid 65534 --gid 65534
+      -- "${build_circuit_bin}"
+  )
+elif [[ "$(uname -s)" == "Darwin" ]] && command -v sandbox-exec >/dev/null 2>&1; then
+  # Read-only everywhere except the scratch dir (and /dev), and no network. TMPDIR
+  # points at the scratch dir so any incidental temp writes stay inside it.
+  macos_profile="(version 1)(allow default)(deny file-write*)(allow file-write* (subpath \"${ops_scratch}\"))(allow file-write* (subpath \"/dev\"))(deny network*)"
+  run_build=(
+    sandbox-exec -p "${macos_profile}"
+      /bin/bash -c 'cd "$1" && export TMPDIR="$1" && exec "$2"' _ "${ops_scratch}" "${build_circuit_bin}"
+  )
+else
+  echo "!! no sandbox available (bubblewrap/sandbox-exec); running build_circuit UNCONFINED (dev fallback)" >&2
+  run_build=( bash -c 'cd "$1" && exec "$2"' _ "${ops_scratch}" "${build_circuit_bin}" )
+fi
+
+# Run it in its own process group, then nuke the group. `setsid` puts it in a
+# fresh pgid; `kill -KILL -<pgid>` reaches every child including double-forked
+# daemons. We trap so we always reap (and clean up the scratch dir).
 cleanup_pgid=""
 cleanup() {
   if [[ -n "${cleanup_pgid}" ]]; then
     kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
   fi
+  if [[ -n "${ops_scratch:-}" ]]; then
+    rm -rf "${ops_scratch}" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
 if command -v setsid >/dev/null 2>&1; then
-  setsid ./target/release/build_circuit &
+  setsid "${run_build[@]}" &
   build_pid=$!
   cleanup_pgid="${build_pid}"
   set +e
@@ -128,7 +178,7 @@ if command -v setsid >/dev/null 2>&1; then
 else
   # Fallback: bash job control puts the background pipeline in its own pgid.
   set -m
-  ./target/release/build_circuit &
+  "${run_build[@]}" &
   build_pid=$!
   cleanup_pgid="${build_pid}"
   set +e
@@ -145,11 +195,17 @@ if [[ "${build_status}" -ne 0 ]]; then
   exit "${build_status}"
 fi
 
+# Copy the untrusted output out of the scratch dir into the repo for scoring.
+if [[ -s "${ops_scratch}/ops.bin" ]]; then
+  cp "${ops_scratch}/ops.bin" ./ops.bin
+fi
+rm -rf "${ops_scratch}"; ops_scratch=""
+
 # 3. Verify ops.bin actually got produced.
 if [[ ! -s ops.bin ]]; then
   echo "!! build_circuit did not produce ops.bin" >&2
   exit 1
 fi
 
-# 4. Trusted scoring stage.
+# 4. Trusted scoring stage (never imports contestant code).
 ./target/release/eval_circuit "$@"

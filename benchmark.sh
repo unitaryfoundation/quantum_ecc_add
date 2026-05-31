@@ -113,8 +113,10 @@ build_circuit_bin="$(pwd)/target/release/build_circuit"
 #    and runs in-process, so at run time it has the binary's privileges. Confine
 #    it: a read-only view of the whole filesystem, no network, all capabilities
 #    dropped, dropped to an unprivileged uid, and writable ONLY in a throwaway
-#    scratch dir that we make its working directory. ops.bin is written there and
-#    copied out afterward. This stops contestant code from overwriting score.json,
+#    scratch dir that we make its working directory (no writable /tmp; TMPDIR
+#    points at the scratch dir, so the scratch dir is the single writable path).
+#    ops.bin is written there and copied out afterward. This stops contestant
+#    code from overwriting score.json,
 #    the trusted eval_circuit binary, or the repo sources, and from reaching the
 #    network — none of which the process-group reap below covers at run time.
 ops_scratch="$(cd "$(mktemp -d)" && pwd -P)"   # resolved real path (the macOS profile needs it)
@@ -128,8 +130,9 @@ chmod 0777 "${ops_scratch}"   # the unprivileged sandbox uid must be able to wri
 if command -v bwrap >/dev/null 2>&1; then
   run_build=(
     bwrap
-      --ro-bind / / --dev /dev --ro-bind /proc /proc --tmpfs /tmp
+      --ro-bind / / --dev /dev --ro-bind /proc /proc
       --bind "${ops_scratch}" "${ops_scratch}" --chdir "${ops_scratch}"
+      --setenv TMPDIR "${ops_scratch}"
       --unshare-user --unshare-net --unshare-ipc --unshare-uts --unshare-cgroup
       --cap-drop ALL --new-session --die-with-parent
       --uid 65534 --gid 65534

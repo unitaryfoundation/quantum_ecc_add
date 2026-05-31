@@ -58,6 +58,46 @@ installed_toolchain_for_channel() {
   return 1
 }
 
+fix_bwrap_file_caps() {
+  local bwrap_path caps
+
+  bwrap_path="$(command -v bwrap 2>/dev/null || true)"
+  [[ -n "${bwrap_path}" ]] || return 0
+  if ! command -v getcap >/dev/null 2>&1 || ! command -v setcap >/dev/null 2>&1; then
+    echo "setup.sh: warning: cannot inspect/repair bwrap capabilities; install libcap tooling" >&2
+    return 0
+  fi
+
+  caps="$(getcap "${bwrap_path}" 2>/dev/null || true)"
+  if [[ -n "${caps}" && ! -u "${bwrap_path}" ]]; then
+    echo "setup.sh: removing unsupported file capabilities from ${bwrap_path}" >&2
+    if ! ${SUDO} setcap -r "${bwrap_path}"; then
+      echo "setup.sh: warning: failed to remove unsupported file capabilities from ${bwrap_path}" >&2
+    fi
+  fi
+}
+
+install_cap_tools() {
+  if command -v getcap >/dev/null 2>&1 && command -v setcap >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    ${SUDO} apt-get update && ${SUDO} apt-get install -y --no-install-recommends libcap2-bin || true
+  elif command -v dnf >/dev/null 2>&1; then
+    ${SUDO} dnf install -y libcap || true
+  elif command -v yum >/dev/null 2>&1; then
+    ${SUDO} yum install -y libcap || true
+  elif command -v apk >/dev/null 2>&1; then
+    ${SUDO} apk add --no-cache libcap || true
+  elif command -v pacman >/dev/null 2>&1; then
+    ${SUDO} pacman -Sy --noconfirm libcap || true
+  elif command -v zypper >/dev/null 2>&1; then
+    ${SUDO} zypper --non-interactive install libcap-progs || true
+  fi
+}
+
 install_system_deps() {
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
@@ -104,6 +144,29 @@ if [[ -z "${compiler}" ]]; then
   exit 1
 fi
 export CC="${compiler}"
+
+# 1b. Confinement tool. benchmark.sh sandboxes the untrusted build_circuit run
+#     with bubblewrap, and runs offline, so install bwrap now. Best-effort:
+#     hosts without a supported package manager (e.g. macOS dev) fall back to an
+#     unconfined run in benchmark.sh.
+if ! command -v bwrap >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    ${SUDO} apt-get update && ${SUDO} apt-get install -y --no-install-recommends bubblewrap libcap2-bin || true
+  elif command -v dnf >/dev/null 2>&1; then
+    ${SUDO} dnf install -y bubblewrap libcap || true
+  elif command -v yum >/dev/null 2>&1; then
+    ${SUDO} yum install -y bubblewrap libcap || true
+  elif command -v apk >/dev/null 2>&1; then
+    ${SUDO} apk add --no-cache bubblewrap libcap || true
+  elif command -v pacman >/dev/null 2>&1; then
+    ${SUDO} pacman -Sy --noconfirm bubblewrap libcap || true
+  elif command -v zypper >/dev/null 2>&1; then
+    ${SUDO} zypper --non-interactive install bubblewrap libcap-progs || true
+  fi
+fi
+install_cap_tools
+fix_bwrap_file_caps
 
 # 2. Rust toolchain.
 if ! command -v cargo >/dev/null 2>&1; then

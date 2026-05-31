@@ -3,8 +3,12 @@
 #
 #   1. Wipe stale ops.bin / score.json so a contestant cannot pre-seed them.
 #   2. Run build_circuit (UNTRUSTED — runs contestant code in src/point_add)
-#      in its own process group; on exit, kill the whole group so a forked
-#      child cannot survive and overwrite score.json after step 4.
+#      under bubblewrap: read-only filesystem, no network, all capabilities
+#      dropped, unprivileged uid, writable only in a throwaway scratch dir
+#      (its cwd) where it emits ops.bin. Also run it in its own process group
+#      and kill the whole group on exit so a forked child cannot survive and
+#      tamper afterward. (Linux uses bubblewrap; macOS uses sandbox-exec; if
+#      neither is available it falls back to an unconfined local-dev run.)
 #   3. Verify ops.bin exists. If build_circuit exited early or crashed,
 #      the file is missing and we fail closed.
 #   4. Run eval_circuit (TRUSTED — never imports contestant code) which
@@ -103,39 +107,110 @@ rm -f ops.bin score.json
 # Make sure both binaries are present (cheap rebuild — no-op if up to date).
 RUSTFLAGS="-C linker=${compiler}" cargo build --release --locked --offline --bin build_circuit --bin eval_circuit
 
-# 2. Run build_circuit in its own process group, then nuke the group.
-#    `setsid` puts it in a fresh pgid; `kill -KILL -<pgid>` reaches every
-#    child including double-forked daemons. We trap so we always reap.
-#    On macOS `setsid` is missing — fall back to `set -m` + `kill %1`.
+build_circuit_bin="$(pwd)/target/release/build_circuit"
+
+# 2. Run build_circuit (UNTRUSTED). Contestant code is compiled into this binary
+#    and runs in-process, so at run time it has the binary's privileges. Confine
+#    it: a read-only view of the whole filesystem, no network, all capabilities
+#    dropped, dropped to an unprivileged uid, and writable ONLY in a throwaway
+#    scratch dir that we make its working directory (no writable /tmp; TMPDIR
+#    points at the scratch dir, so the scratch dir is the single writable path).
+#    ops.bin is written there and copied out afterward. This stops contestant
+#    code from overwriting score.json,
+#    the trusted eval_circuit binary, or the repo sources, and from reaching the
+#    network — none of which the process-group reap below covers at run time.
+ops_scratch="$(cd "$(mktemp -d)" && pwd -P)"   # resolved real path (the macOS profile needs it)
+chmod 0777 "${ops_scratch}"   # the unprivileged sandbox uid must be able to write here
+
+# Build the (possibly confined) invocation:
+#   - Linux: bubblewrap (installed by setup.sh in the trusted sandbox).
+#   - macOS: sandbox-exec (Seatbelt) with an equivalent read-only / no-network profile.
+#   - neither available: unconfined fallback (local dev only; the platform always
+#     scores in a sandbox, so this never applies to the official run).
+bwrap_via_sudo=0
+if command -v bwrap >/dev/null 2>&1; then
+  # The sandbox runs this as a non-root user, and its bwrap carries Linux file
+  # capabilities without setuid — which bwrap refuses when run non-root
+  # ("Unexpected capabilities but not setuid, old file caps config?"). Get bwrap
+  # to start unprivileged, in order of preference:
+  #   - sudo: run bwrap as root (the sandbox is provisioned with sudo). bwrap
+  #     then drops to uid 65534 with no caps for the actual run.
+  #   - else setpriv --no-new-privs: makes the kernel ignore the file caps so
+  #     bwrap takes the unprivileged user-namespace path (no sudo required).
+  #   - else plain bwrap (setuid or no-caps installs).
+  # Either way the run ends up read-only, no-network, unprivileged.
+  bw=( bwrap )
+  if [[ "$(id -u)" -ne 0 ]] && command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    bw=( sudo -n bwrap )
+    bwrap_via_sudo=1
+  elif command -v setpriv >/dev/null 2>&1; then
+    bw=( setpriv --no-new-privs bwrap )
+  fi
+  run_build=(
+    "${bw[@]}"
+      --ro-bind / / --dev /dev --ro-bind /proc /proc
+      --bind "${ops_scratch}" "${ops_scratch}" --chdir "${ops_scratch}"
+      --setenv TMPDIR "${ops_scratch}"
+      --unshare-user --unshare-net --unshare-ipc --unshare-uts --unshare-cgroup
+      --cap-drop ALL --new-session --die-with-parent
+      --uid 65534 --gid 65534
+      -- "${build_circuit_bin}"
+  )
+elif [[ "$(uname -s)" == "Darwin" ]] && command -v sandbox-exec >/dev/null 2>&1; then
+  # Read-only everywhere except the scratch dir (and /dev), and no network. TMPDIR
+  # points at the scratch dir so any incidental temp writes stay inside it.
+  macos_profile="(version 1)(allow default)(deny file-write*)(allow file-write* (subpath \"${ops_scratch}\"))(allow file-write* (subpath \"/dev\"))(deny network*)"
+  run_build=(
+    sandbox-exec -p "${macos_profile}"
+      /bin/bash -c 'cd "$1" && export TMPDIR="$1" && exec "$2"' _ "${ops_scratch}" "${build_circuit_bin}"
+  )
+else
+  echo "!! no sandbox available (bubblewrap/sandbox-exec); running build_circuit UNCONFINED (dev fallback)" >&2
+  run_build=( bash -c 'cd "$1" && exec "$2"' _ "${ops_scratch}" "${build_circuit_bin}" )
+fi
+
+# Run it in its own process group, then nuke the group. `setsid` puts it in a
+# fresh pgid; killing `-<pgid>` reaches every child including double-forked
+# daemons. When bwrap ran via sudo (root + uid-65534 children), reap via sudo so
+# we can signal them. We trap so we always reap and clean up the scratch dir.
 cleanup_pgid=""
-cleanup() {
-  if [[ -n "${cleanup_pgid}" ]]; then
+reap() {
+  [[ -n "${cleanup_pgid}" ]] || return 0
+  if [[ "${bwrap_via_sudo}" -eq 1 ]]; then
+    sudo -n kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
+  else
     kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
+  fi
+}
+cleanup() {
+  reap
+  if [[ -n "${ops_scratch:-}" ]]; then
+    rm -rf "${ops_scratch}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
 
 if command -v setsid >/dev/null 2>&1; then
-  setsid ./target/release/build_circuit &
+  setsid "${run_build[@]}" &
   build_pid=$!
   cleanup_pgid="${build_pid}"
   set +e
   wait "${build_pid}"
   build_status=$?
   set -e
-  kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
+  reap
   cleanup_pgid=""
 else
   # Fallback: bash job control puts the background pipeline in its own pgid.
   set -m
-  ./target/release/build_circuit &
+  "${run_build[@]}" &
   build_pid=$!
   cleanup_pgid="${build_pid}"
   set +e
   wait "${build_pid}"
   build_status=$?
   set -e
-  kill -KILL -"${cleanup_pgid}" 2>/dev/null || true
+  reap
   cleanup_pgid=""
   set +m
 fi
@@ -145,11 +220,17 @@ if [[ "${build_status}" -ne 0 ]]; then
   exit "${build_status}"
 fi
 
+# Copy the untrusted output out of the scratch dir into the repo for scoring.
+if [[ -s "${ops_scratch}/ops.bin" ]]; then
+  cp "${ops_scratch}/ops.bin" ./ops.bin
+fi
+rm -rf "${ops_scratch}"; ops_scratch=""
+
 # 3. Verify ops.bin actually got produced.
 if [[ ! -s ops.bin ]]; then
   echo "!! build_circuit did not produce ops.bin" >&2
   exit 1
 fi
 
-# 4. Trusted scoring stage.
+# 4. Trusted scoring stage (never imports contestant code).
 ./target/release/eval_circuit "$@"

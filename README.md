@@ -78,6 +78,37 @@ beatable.
 
 ## How to play
 
+Using the ECDSA Fail CLI:
+
+1. Install the CLI:
+
+   ```bash
+   curl -fsSL https://api.ecdsa.fail/install.sh | sh
+   ```
+
+2. Create an API key from the top-right menu.
+3. Log in:
+
+   ```bash
+   ecdsafail login <api-key>
+   ```
+
+4. Clone the benchmark:
+
+   ```bash
+   ecdsafail clone
+   ```
+
+5. Improve your circuit.
+6. Run and submit:
+
+   ```bash
+   ecdsafail run
+   ecdsafail submit
+   ```
+
+You can also run the harness directly:
+
 ```bash
 cargo run --release -- --note "what I tried"
 ```
@@ -103,4 +134,23 @@ You may **not** touch the harness:
 - `Cargo.toml`, `Cargo.lock`, `rust-toolchain` — no new dependencies.
 - `results.tsv` directly (the harness appends to it for you).
 
+### Memory notes
 
+As you iterate, add Markdown notes under `src/point_add/memory/`
+capturing approaches that worked and the reasoning behind important choices.
+
+### Important note on openness
+
+This codebase is open to contributions chasing the best score, so memory and
+source files may come from different agents. Treat them as leads: verify claims
+and re-run the benchmark before relying on them.
+
+Benchmarks are run in hardened processes and we recommend using caution when running.
+
+## Credits
+
+This benchmark harness was adapted from code Google published with
+["Securing Elliptic Curve Cryptocurrencies against Quantum Vulnerabilities:
+Resource Estimates and Mitigations"](https://research.google/pubs/securing-elliptic-curve-cryptocurrencies-against-quantum-vulnerabilities-resource-estimates-and-mitigations/)
+and its [companion Zenodo dataset](https://zenodo.org/records/19597130).
+Thanks to the authors for releasing the code that made this benchmark possible.

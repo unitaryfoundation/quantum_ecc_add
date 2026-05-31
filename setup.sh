@@ -58,6 +58,22 @@ installed_toolchain_for_channel() {
   return 1
 }
 
+fix_bwrap_file_caps() {
+  local bwrap_path caps
+
+  bwrap_path="$(command -v bwrap 2>/dev/null || true)"
+  [[ -n "${bwrap_path}" ]] || return 0
+  command -v getcap >/dev/null 2>&1 || return 0
+  command -v setcap >/dev/null 2>&1 || return 0
+
+  caps="$(getcap "${bwrap_path}" 2>/dev/null || true)"
+  if [[ -n "${caps}" && ! -u "${bwrap_path}" ]]; then
+    if ! ${SUDO} setcap -r "${bwrap_path}"; then
+      echo "setup.sh: warning: failed to remove unsupported file capabilities from ${bwrap_path}" >&2
+    fi
+  fi
+}
+
 install_system_deps() {
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
@@ -125,6 +141,7 @@ if ! command -v bwrap >/dev/null 2>&1; then
     ${SUDO} zypper --non-interactive install bubblewrap || true
   fi
 fi
+fix_bwrap_file_caps
 
 # 2. Rust toolchain.
 if ! command -v cargo >/dev/null 2>&1; then

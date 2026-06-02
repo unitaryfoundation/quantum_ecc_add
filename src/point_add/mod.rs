@@ -10066,12 +10066,17 @@ pub fn build() -> Vec<Op> {
     // a, b are constant 1 placeholders). a=tx[0], b=ty[0], c=ox[0]
     // are taken from the declared registers — no extra qubit allocations,
     // peak qubit count unchanged.
-    // Default intentionally stays one dummy pair below the previous 7_498 setting.
+    // Default 0: this block is a harness-sensitivity DIAGNOSTIC, not part of
+    // the real circuit. A non-zero default injects self-cancelling CCX pairs
+    // that do nothing but inflate the scored average Toffoli count (each pair
+    // adds 2 executed Toffoli/shot). The previous 7_400 default cost 14_800
+    // Toffoli/shot for free. Keep the knob for sensitivity tests via the
+    // DUMMY_TOFFOLIS env var, but default it OFF so `main` is scored honestly.
     {
         let n: usize = std::env::var("DUMMY_TOFFOLIS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(7_400);
+            .unwrap_or(0);
         if n > 0 {
             // Pick three distinct register entries — anything works as long
             // as the pair self-cancels.

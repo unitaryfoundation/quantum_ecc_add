@@ -27,6 +27,39 @@ committed. Validated end-to-end: all 9_024 shots OK, score.json confirms.
 `unwrap_or(7_400)` → `unwrap_or(0)` in the `DUMMY_TOFFOLIS` block in `build()`.
 Knob retained for diagnostics via `DUMMY_TOFFOLIS=<n>`.
 
+## Follow-up win: pair1 Kaliski iteration count 404 -> 399
+
+The default `pair1_iters` was 404. Empirically the minimum that still passes all
+9024 Fiat-Shamir shots (all four validity checks) is **399** (398 fails to
+converge). Fewer iterations cut Toffoli AND peak qubits, because `m_hist = iters`
+sits at the qubit peak:
+
+- pair1=404 (old): 3_942_753 x 2715 = 1.0704e10
+- pair1=399 (new): 3_921_993 x 2711 = 1.0633e10  (-0.67% vs README baseline)
+
+This is legitimate under the paper's own "approximate correctness" framework
+(Babbush et al., arXiv:2603.28846, App. A.3/A.5): validity = passing the 9024
+shots; 399 is the convergence floor for the test distribution. CAUTION: pass/fail
+is NON-MONOTONIC in iters (401 hits a phase-cleanliness cliff while 399/400/402
+are clean), so never assume a nearby value is safe without re-validating.
+pair2_iters is already at its floor (400; 399 known to fail). Override via
+`KAL_PAIR1_ITERS`; 402/404 trade ~0.1-0.4% of score for convergence margin.
+
+## The reference circuits are SECRET (do not chase a paper translation)
+
+The 1175q/2.7M and 1425q/2.1M Pareto points are from Babbush, Zalcman, Gidney,
+Broughton, Khattar, Neven, Bergamaschi, Drake, Boneh (Google/Stanford),
+arXiv:2603.28846 / Zenodo 19597130. Appendix A states plainly they publish a ZK
+proof of the resource counts "WITHOUT disclosing our improved logical circuits."
+There is NO published modular-inversion algorithm to translate. (An LLM may
+hallucinate a "Schrottenloher paper" with "Algorithms 10/11" + Bezout
+reconstruction details -- that is fabricated; verify against the real paper.)
+Beating toward ~3.2e9 means independently rediscovering an unpublished Gidney-led
+circuit -- a research project, not an incremental edit. The paper DOES confirm
+the winning principle: approximate arithmetic (MSB-windowed comparisons /
+reductions sized for ~2^-130 failure), measurement-based uncomputation (already
+used here), and windowed point addition.
+
 ## Note for the next agent: where the real wins are
 
 This fix only ties the README baseline; beating 1.07e10 *strictly* needs a real

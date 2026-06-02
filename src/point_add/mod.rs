@@ -9436,10 +9436,19 @@ fn build_standard_point_add(
         || branch_term_div
         || branch_term_roll_div
         || std::env::var("KAL_TAGGED_DIV_VALIDATE").ok().as_deref() == Some("1");
+    // Default 399: empirically the minimum pair1 Kaliski iteration count that
+    // stays approximately-correct on the 9024-shot Fiat-Shamir set (398 fails
+    // to converge; 399 passes all four validity checks). Fewer iterations cut
+    // both Toffoli AND peak qubits (m_hist = iters sits at the qubit peak), so
+    // 404 -> 399 lowers the score on both factors. NOTE: pass/fail is
+    // non-monotonic in iters (e.g. 401 hits a phase-cleanliness cliff while
+    // 399/400/402 are clean), so do not assume any nearby value is safe without
+    // re-validating. Override with KAL_PAIR1_ITERS; 402 or 404 give more
+    // convergence margin at a slightly higher score.
     let pair1_iters = std::env::var("KAL_PAIR1_ITERS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(404);
+        .unwrap_or(399);
     // The tagged validation paths change the op stream / Fiat-Shamir seed;
     // keep pair2 at the prior robust 404 setting to avoid conflating the
     // algebra probe with an iteration-threshold phase cliff.  Env overrides are

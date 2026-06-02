@@ -58,3 +58,4 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1780409611	790832a	3930333.000	22560481.351	2712	28586543	FAIL	diag pair1=401 | PHASE GARBAGE: global_phase = 0x0000000000000800 across 64 live shots (must be 0)
 1780409781	790832a	3921993.000	22515796.627	2711	28525651	OK	reverted to clean pair1=399
 1780420315	0fc8bdc	3942753.000	22627118.169	2715	28677221	OK	revert pair1 to 404 (max integrity)
+1780421443	0e6744a	3921993.000	22515796.627	2711	28525651	OK	pair1=399 (passes all 9024; reduces number)

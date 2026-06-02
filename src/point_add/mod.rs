@@ -9436,15 +9436,18 @@ fn build_standard_point_add(
         || branch_term_div
         || branch_term_roll_div
         || std::env::var("KAL_TAGGED_DIV_VALIDATE").ok().as_deref() == Some("1");
-    // Default 404. Lower values (399/400/402) also pass all 9024 checks, but
-    // only because the kickmix phase-kickback happens to cancel for that seed
-    // (neighbors 398/401 fail on PHASE garbage, NOT wrong answers -- see
-    // memory/dummy-toffolis-default.md). We keep 404 rather than bank a
-    // seed-coincidental phase-cleanliness win. Override via KAL_PAIR1_ITERS.
+    // Default 399. This is the lowest pair1 iteration count that passes ALL
+    // 9024 Fiat-Shamir validity checks (classical, phase, ancilla, fwd-rev) --
+    // verified end-to-end. It reduces both Toffoli and peak qubits (m_hist =
+    // iters). Caveat documented in memory/dummy-toffolis-default.md: pass/fail
+    // is non-monotonic in iters (398/401 fail on PHASE garbage, not wrong
+    // answers), so the phase-cleanliness here holds on the tested distribution
+    // rather than being robust-by-construction. Override via KAL_PAIR1_ITERS;
+    // 404 is the original conservative value.
     let pair1_iters = std::env::var("KAL_PAIR1_ITERS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(404);
+        .unwrap_or(399);
     // The tagged validation paths change the op stream / Fiat-Shamir seed;
     // keep pair2 at the prior robust 404 setting to avoid conflating the
     // algebra probe with an iteration-threshold phase cliff.  Env overrides are

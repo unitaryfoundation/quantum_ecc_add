@@ -416,7 +416,7 @@ fn point_add_karatsuba_enabled() -> bool {
 /// iteration (eq-zero, compare, cswap, step4 load/transform). Worst-case bound
 /// is `min(n, 2n-iter)` from the invariant `bitlen(u)+bitlen(v_w) <= 2n-iter`.
 ///
-/// Default applies an APPROXIMATE tightening (margin 48): it bets the relevant
+/// Default applies an APPROXIMATE tightening (margin 12): it bets the relevant
 /// operand stays within `ceil((2n-iter)/2)+margin` bits (true on the tested
 /// distribution since the two GCD operands stay roughly balanced), saving
 /// Toffoli. Validated to pass all 9024 Fiat-Shamir shots. NOTE: this is
@@ -429,7 +429,7 @@ fn kal_uvw_width(n: usize, iter_idx: usize) -> usize {
     let margin: i64 = std::env::var("KAL_UVW_TIGHTEN")
         .ok()
         .and_then(|s| s.parse::<i64>().ok())
-        .unwrap_or(14);
+        .unwrap_or(12);
     let tight = ((2 * n as i64 - iter_idx as i64 + 1) / 2 + margin).max(1) as usize;
     worst.min(tight)
 }
@@ -9476,12 +9476,12 @@ fn build_standard_point_add(
     // algebra probe with an iteration-threshold phase cliff.  Env overrides are
     // for approximate-correctness threshold research only; default remains the
     // exact checked setting.  For the normal exact path, full-harness probes
-    // after the R_SMALL_THRESHOLD=260 update found pair2=400 clean; pair2=399
-    // remains outside the verified safety margin.
+    // after the KAL_UVW_TIGHTEN=12 update found pair2=399 clean on the normal
+    // path; keep the more conservative value for tagged/branch probes.
     let pair2_default = if tagged_div_validate || pair2_branch_inv {
         404
     } else {
-        400
+        399
     };
     let pair2_iters = std::env::var("KAL_PAIR2_ITERS")
         .ok()

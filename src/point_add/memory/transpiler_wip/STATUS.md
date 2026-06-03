@@ -63,3 +63,27 @@ classical bit ids). That is the next real step, and it is non-trivial.
 Bug also found: controlled gates (all `z`, all `cz`) must NOT be emitted as bare
 Z/CZ -- they carry measured controls. Earlier transpile_validate.py dropped z's
 control (138k gates) -> garbage. Fix requires the cbit dataflow above.
+
+## RESOLVED: Qarton measure -> cbit mapping
+The classical bit IS the measured qubit's own position. Verified on 127-bit IPModMul:
+- every `h(q)` is immediately followed by `measure(q)` (116184/116184) -> X-basis measure.
+- ALL correction/feedforward controls are measure-target positions (subset check = True):
+    cz corrections: 47046  (2 qubit targets, ctrl = measured pos)
+    z  corrections: 138276 (1 qubit target,  ctrl = measured pos)
+    cx feedforward: 99611  (control = measured pos)   <-- classical feedforward!
+    ccx feedforward: 16146 (a control = measured pos)
+- positions >= nbr_qubits (e.g. 645 with nbr_qubits=606) are just high-INDEX ancilla
+  qubits; 606 is peak-simultaneous-live, not max index.
+Mapping to harness: h(q);measure(q);...;reset(q) -> Hmr(q,c); every later gate whose
+control is position q (until reset) is conditioned on classical bit c
+(cz/z -> cz_if / conditioned-Z; cx/ccx -> classically-conditioned X/CX).
+sim2.py implements this (classical[pos]=outcome; cval() reads it for controls).
+
+## NEXT separate bug (not the mapping): basis-state sim still off
+With the mapping applied, sim2.py still fails (xout!=x, ~73 dirty ancillas). The
+mapping is correct; the remaining issue is matching the harness sim's measurement+
+feedforward semantics EXACTLY for a single shot (collapsed-value vs reset-to-0 of a
+measured position; ordering of phase kickback vs feedforward). sim.rs Hmr sets the
+qubit to 0, classical bit = rng, phase ^= qubit&rng. Need to diff sim2 against sim.rs
+gate-by-gate (or against Qarton's own simulator) to find the divergent op. This is the
+next scoped step.

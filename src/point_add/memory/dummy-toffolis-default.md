@@ -73,6 +73,30 @@ BY DESIGN (fix the cz_if phase corrections to match the reduced widths so phase=
 for all inputs, not just the tested seed) -- then the width win becomes real.
 That is the concrete open lead for the next agent.
 
+## Venting / low-carry adders are NET-NEGATIVE for this Kaliski circuit
+
+Tested the Gidney 2025 "carry-venting" idea (arXiv:2507.23079) and its in-repo
+q-q analog (swap fast adders, which hold n-1 carry ancillae, for non-fast
+Cuccaro, which hold ~1). The ecdsafail/ecdsafail-challenge repo is betting on
+this to drop peak 2716->1800-2000. Measured result: it does NOT win here.
+
+The qubit peak is a PLATEAU, not a spike: phases sol_addlo, kara_z1_add, and
+the Kaliski per-iteration kal/bk_step4 + step6_7_8 are ALL at 2708-2711.
+- Venting the multiply adds (sol_*, kara_z1_add) is cheap (few executions) but
+  gives ZERO global peak reduction -- the Kaliski-step plateau (2708-2710) sits
+  right behind. Measured: KAL_SOLINAS_LOWCARRY on -> peak unchanged 2711,
+  Toffoli +5123. Net worse.
+- The only way below ~2710 is to vent the Kaliski step4 adds too, but they run
+  ~1600x (399+399+400+400 iters x 2 adds/iter), so venting them costs ~+800k
+  Toffoli. Net product gets WORSE: ~4.7M x 2455 = 1.17e10 vs 1.07e10 baseline.
+
+So venting pays off only for a NON-Kaliski architecture (e.g. Google's windowed
+point-add, where the per-iteration GCD adds don't exist). For this binary-GCD
+circuit, the Kaliski per-iteration adds make the qubit/Toffoli trade lose on the
+product. This is why the serious ecdsafail effort, pursuing venting, has not yet
+beaten baseline. Don't re-attempt venting on the Kaliski path without first
+replacing the inversion.
+
 ## The reference circuits are SECRET (do not chase a paper translation)
 
 The 1175q/2.7M and 1425q/2.1M Pareto points are from Babbush, Zalcman, Gidney,

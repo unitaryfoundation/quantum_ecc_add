@@ -42,6 +42,41 @@ pub fn emit_compressor(b: &mut B, q: &[QubitId; 6]) {
     }
 }
 
+/// The inverse compressor (reversed gate sequence): maps a 5-bit compressed
+/// value (in q[0..5], q[5]=0) back to its 6-bit (00|10|11)^3 form.
+fn compressor_inverse_gates() -> Vec<CompGate> {
+    let mut g = compressor_gates().to_vec();
+    g.reverse();
+    g
+}
+
+/// Swapper(i): on a 6-qubit work register `w[0..6]` holding a compressed dialog
+/// chunk (w[0..5] = compressed, w[5]=0 ancilla) and a 2-qubit pair `bb`, swap
+/// `bb` with the (b0,b0&b1) pair at position `i ∈ {0,1,2}` of the chunk.
+/// Sequence: uncompress (Compressor⁻¹) → swap bb↔(w[2i],w[2i+1]) → compress.
+/// `Absorber` is the same circuit used when bb's target slot is known to be 0
+/// (so bb is consumed into the dialog, no output) — identical gates.
+fn swapper_gate_sim(i: usize, bb: [u8; 2], comp5: [u8; 5]) -> ([u8; 2], [u8; 5]) {
+    // 6-qubit work register: [c0,c1,c2,c3,c4, anc=0]
+    let mut w = [comp5[0], comp5[1], comp5[2], comp5[3], comp5[4], 0u8];
+    let mut b = bb;
+    let apply = |w: &mut [u8; 6], gates: &[CompGate]| {
+        for g in gates {
+            match *g {
+                CompGate::X(t) => w[t] ^= 1,
+                CompGate::Cx(c, t) => w[t] ^= w[c],
+                CompGate::Ccx(a, c, t) => w[t] ^= w[a] & w[c],
+            }
+        }
+    };
+    apply(&mut w, &compressor_inverse_gates()); // now w[0..6] = uncompressed 6 bits
+    std::mem::swap(&mut b[0], &mut w[2 * i]);
+    std::mem::swap(&mut b[1], &mut w[2 * i + 1]);
+    apply(&mut w, &compressor_gates()); // recompress; w[5] back to 0
+    debug_assert_eq!(w[5], 0);
+    (b, [w[0], w[1], w[2], w[3], w[4]])
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Phase 2a: classical oracle for the split-EEA inversion (the function the
 // forward dialog + Bezout circuits must reproduce). Ported from gcd_functions.py.
@@ -217,6 +252,27 @@ mod tests {
             let r = simulate(*inp);
             assert_eq!(&r[0..5], &out[..], "compress output wrong for input {:?}", inp);
             assert_eq!(r[5], 0, "ancilla (q[5]) not returned to 0 for input {:?}", inp);
+        }
+    }
+
+    #[test]
+    fn swapper_matches_reference_semantics() {
+        // reference Swapper.dummy_classical_function (compressor.py)
+        for i in 0..3 {
+            for bb in [[0u8, 0], [1, 0], [1, 1]] {
+                for (inp, comp) in TRUTH.iter() {
+                    // `comp` is a valid compressed value; its uncompression is `inp`
+                    let dec = *inp; // uncompress(comp) == inp by construction of TRUTH
+                    let mut expect_dec = dec;
+                    let new_bb = [dec[2 * i], dec[2 * i + 1]];
+                    expect_dec[2 * i] = bb[0];
+                    expect_dec[2 * i + 1] = bb[1];
+                    let expect_comp = super::compress6(expect_dec);
+                    let (got_bb, got_comp) = super::swapper_gate_sim(i, bb, *comp);
+                    assert_eq!(got_bb, new_bb, "swapper bb out wrong i={} bb={:?} comp={:?}", i, bb, comp);
+                    assert_eq!(got_comp, expect_comp, "swapper comp out wrong i={} bb={:?}", i, bb);
+                }
+            }
         }
     }
 

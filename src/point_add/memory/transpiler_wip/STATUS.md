@@ -46,3 +46,20 @@ qubit, so even `x` is not preserved. Must:
 NOT beaten. 2.48e9 unbeaten; current real submission on main = 9.69e9.
 The transpile route is de-risked to "transpiler runs on the real circuit;
 debugging the measurement/classical-bit model"; the rest is sustained engineering.
+
+## UPDATE: real obstacle in the iterate_basic_gates lowering
+Two correction mechanisms, both controlled by measured CLASSICAL bits:
+- cz: 47046, each (2 quantum targets, 1 measured control)  [AND-uncompute MBUC]
+- z : 138276, each (1 quantum target, 1 measured control)  [classical-controlled Z phase]
+The control positions are classical-bit positions (>= nbr_qubits, e.g. 645 with
+nbr_qubits=606; nbr_bits=858). BUT iterate_basic_gates' `measure` op only carries
+the measured QUBIT, not its output classical-bit position -- so the measure->cbit
+dataflow (which correction reads which measurement) is LOST in this lowering.
+=> A faithful transpile cannot use iterate_basic_gates alone; it needs a lowering
+that preserves classical dataflow (e.g. via quantum_simulator.decompose_operation,
+which threads measurement outputs, or a custom traversal of the op tree that keeps
+classical bit ids). That is the next real step, and it is non-trivial.
+
+Bug also found: controlled gates (all `z`, all `cz`) must NOT be emitted as bare
+Z/CZ -- they carry measured controls. Earlier transpile_validate.py dropped z's
+control (138k gates) -> garbage. Fix requires the cbit dataflow above.

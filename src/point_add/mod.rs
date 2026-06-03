@@ -71,6 +71,7 @@ use crate::weierstrass_elliptic_curve::WeierstrassEllipticCurve;
 
 mod fermat_inv;
 mod venting;
+mod split_eea;
 
 struct B {
     pub ops: Vec<Op>,

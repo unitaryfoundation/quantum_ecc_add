@@ -87,3 +87,24 @@ measured position; ordering of phase kickback vs feedforward). sim.rs Hmr sets t
 qubit to 0, classical bit = rng, phase ^= qubit&rng. Need to diff sim2 against sim.rs
 gate-by-gate (or against Qarton's own simulator) to find the divergent op. This is the
 next scoped step.
+
+## KEY FINDING: iterate_basic_gates is architecturally insufficient for transpile
+- Qarton's own simulator (qc.simulate, amplitude-accurate) CONFIRMS IPModMul(127-bit)
+  computes (x, x*y mod p) exactly -> the reference circuit is correct; the oracle works.
+  (Note: degenerate tiny inputs like x=5 trip the approximate circuit's assertions;
+   must test with full-size random inputs.)
+- WHY my basis-state transpile sim fails: only 47,874 resets for 116,184 measures, and
+  424,564 "writes to a measured position" -> positions are measured, FREED, and REUSED
+  as fresh qubits WITHOUT an explicit reset. iterate_basic_gates carries no qubit
+  alloc/free/measure-destination lifecycle, so "cx controlled by a measured position"
+  (99k) are mostly FALSE POSITIVES (position long-since reused as a fresh qubit).
+- => A faithful transpile cannot use iterate_basic_gates. It must use a LIFECYCLE-AWARE
+  lowering that threads measurement outcomes, resets, and qubit reallocations -- i.e.
+  go through qarton.circuit.quantum_simulator's operation processing (decompose_operation
+  / apply_*), which already tracks this, or a custom traversal that records each measure's
+  destination and each qubit free/realloc.
+
+## Next concrete step
+Build the transpiler on top of quantum_simulator's op processing (it handles measure/
+reset/realloc correctly) rather than iterate_basic_gates, emitting harness Ops as it
+goes. Validate each component vs qc.simulate (the confirmed oracle).

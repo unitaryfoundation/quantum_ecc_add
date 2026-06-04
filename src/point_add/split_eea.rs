@@ -167,6 +167,184 @@ pub fn apply_bitvector(x: U512, y: U512, d: &[u8], p: U512) -> (U512, U512) {
     (u, v)
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Phase 2b: the forward dialog (Euclidean) CIRCUIT, in our harness, built from
+// exact reversible primitives (cuccaro_sub/add, cswap, compressor) so a clean
+// basis-state op-sim is a correct judge. Matches the to_bitvector oracle.
+// ───────────────────────────────────────────────────────────────────────────
+use super::{cswap as kal_cswap, cuccaro_add, cuccaro_sub};
+
+/// flag ^= (u > v), using a temp (n+1) register; u,v restored. Exact.
+fn emit_gt(b: &mut B, u: &[QubitId], v: &[QubitId], flag: QubitId) {
+    let n = u.len();
+    let tmp = b.alloc_qubits(n + 1); // holds v then v-u (extended)
+    for j in 0..n {
+        b.cx(v[j], tmp[j]);
+    }
+    let uhi = b.alloc_qubit(); // u extended high bit = 0
+    let mut u_ext: Vec<QubitId> = u.to_vec();
+    u_ext.push(uhi);
+    let c_in = b.alloc_qubit();
+    cuccaro_sub(b, &u_ext, &tmp, c_in); // tmp = v - u mod 2^(n+1); tmp[n]=borrow=(v<u)=(u>v)
+    b.cx(tmp[n], flag);
+    cuccaro_add(b, &u_ext, &tmp, c_in); // restore tmp = v
+    b.free(c_in);
+    b.free(uhi);
+    for j in 0..n {
+        b.cx(v[j], tmp[j]); // tmp -> 0
+    }
+    b.free_vec(&tmp);
+}
+
+/// Absorb (b0, b0b1) into a 5-bit compressed dialog chunk at position pos∈{0,1,2}.
+/// chunk position pos must currently be (0,0) in uncompressed form. Uses 1 ancilla.
+fn emit_absorb(b: &mut B, bb0: QubitId, bb1: QubitId, chunk: &[QubitId; 5], pos: usize) {
+    let anc = b.alloc_qubit(); // 6th bit of the work reg, = 0
+    let w = [chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], anc];
+    // Compressor inverse (reversed gate list)
+    for g in compressor_gates().iter().rev() {
+        match *g {
+            CompGate::X(t) => b.x(w[t]),
+            CompGate::Cx(c, t) => b.cx(w[c], w[t]),
+            CompGate::Ccx(a, c, t) => b.ccx(w[a], w[c], w[t]),
+        }
+    }
+    // swap (bb0,bb1) into decompressed positions
+    b.swap(bb0, w[2 * pos]);
+    b.swap(bb1, w[2 * pos + 1]);
+    // Compressor forward
+    for g in compressor_gates() {
+        match g {
+            CompGate::X(t) => b.x(w[t]),
+            CompGate::Cx(c, t) => b.cx(w[c], w[t]),
+            CompGate::Ccx(a, c, t) => b.ccx(w[a], w[c], w[t]),
+        }
+    }
+    b.free(anc);
+}
+
+/// Forward dialog: runs the binary-GCD on (u,v), recording the compressed dialog,
+/// leaving (u,v) = (1,0). `dialog` must be 5*(iters/3) qubits, all 0 on entry.
+/// Mirrors the to_bitvector oracle: per iter compute b0=v&1, b0b1=b0&(u>v);
+/// apply (if b0b1 swap u,v); (if b0 v-=u); v>>=1; then absorb (b0,b0b1) into dialog.
+fn forward_dialog(b: &mut B, u: &[QubitId], v: &[QubitId], dialog: &[QubitId], iters: usize) {
+    let n = u.len();
+    for i in 0..iters {
+        let b0 = b.alloc_qubit();
+        b.cx(v[0], b0); // b0 = v is odd
+        let gt = b.alloc_qubit();
+        emit_gt(b, u, v, gt); // gt = (u > v)
+        let b0b1 = b.alloc_qubit();
+        b.ccx(b0, gt, b0b1); // b0b1 = b0 & (u>v)
+        emit_gt(b, u, v, gt); // uncompute gt -> 0
+        b.free(gt);
+
+        // apply ops BEFORE absorbing (absorb zeroes b0,b0b1)
+        for j in 0..n {
+            kal_cswap(b, b0b1, u[j], v[j]); // if b0b1: swap(u,v)
+        }
+        // if b0: v -= u  (load tmp = b0 & u, v -= tmp, unload)
+        let tmp = b.alloc_qubits(n);
+        for j in 0..n {
+            b.ccx(b0, u[j], tmp[j]);
+        }
+        let c_in = b.alloc_qubit();
+        cuccaro_sub(b, &tmp, v, c_in); // v -= tmp
+        b.free(c_in);
+        for j in 0..n {
+            b.ccx(b0, u[j], tmp[j]); // unload
+        }
+        b.free_vec(&tmp);
+        // v >>= 1 (v[0] is now 0): rotate down
+        for j in 0..n - 1 {
+            b.swap(v[j], v[j + 1]);
+        }
+
+        // absorb (b0,b0b1) at chunk i/3, position i%3 (init chunk on i%3==0)
+        let chunk: [QubitId; 5] = [
+            dialog[5 * (i / 3)], dialog[5 * (i / 3) + 1], dialog[5 * (i / 3) + 2],
+            dialog[5 * (i / 3) + 3], dialog[5 * (i / 3) + 4],
+        ];
+        if i % 3 == 0 {
+            // initialize chunk to compress([0,0,0,0,0,0]) = [0,0,1,0,1]
+            b.x(chunk[2]);
+            b.x(chunk[4]);
+        }
+        emit_absorb(b, b0, b0b1, &chunk, i % 3);
+        b.free(b0b1); // now 0
+        b.free(b0); // now 0
+    }
+}
+
+#[cfg(test)]
+mod fwd_tests {
+    use super::*;
+    use crate::circuit::OperationType;
+    use std::collections::HashMap;
+
+    fn simulate(ops: &[crate::circuit::Op], init: &HashMap<u64, u8>) -> HashMap<u64, u8> {
+        let mut q = init.clone();
+        let g = |q: &HashMap<u64, u8>, id: u64| *q.get(&id).unwrap_or(&0);
+        for op in ops {
+            match op.kind {
+                OperationType::CCX => {
+                    let v = g(&q, op.q_control1.0) & g(&q, op.q_control2.0);
+                    *q.entry(op.q_target.0).or_insert(0) ^= v;
+                }
+                OperationType::CX => {
+                    let v = g(&q, op.q_control1.0);
+                    *q.entry(op.q_target.0).or_insert(0) ^= v;
+                }
+                OperationType::X => {
+                    *q.entry(op.q_target.0).or_insert(0) ^= 1;
+                }
+                OperationType::Swap => {
+                    let a = g(&q, op.q_control1.0);
+                    let b = g(&q, op.q_target.0);
+                    q.insert(op.q_control1.0, b);
+                    q.insert(op.q_target.0, a);
+                }
+                OperationType::R | OperationType::Hmr => {
+                    // reset-on-free: a clean free leaves the qubit at 0
+                    q.insert(op.q_target.0, 0);
+                }
+                OperationType::AppendToRegister | OperationType::Register => {}
+                other => panic!("forward_dialog emitted non-exact op {:?}", other),
+            }
+        }
+        q
+    }
+
+    #[test]
+    fn forward_dialog_matches_oracle() {
+        let n = 12usize;
+        let p: u64 = 4093; // 12-bit prime
+        let iters = iters_for(n);
+        for v0 in [1u64, 2, 7, 100, 1234, 4000] {
+            let b = &mut super::super::B::new();
+            let u = b.alloc_qubits(n);
+            let v = b.alloc_qubits(n);
+            let dialog = b.alloc_qubits(5 * (iters / 3));
+            forward_dialog(b, &u, &v, &dialog, iters);
+            let mut init: HashMap<u64, u8> = HashMap::new();
+            for j in 0..n {
+                if (p >> j) & 1 == 1 { init.insert(u[j].0, 1); }
+                if (v0 >> j) & 1 == 1 { init.insert(v[j].0, 1); }
+            }
+            let q = simulate(&b.ops, &init);
+            let g = |id: u64| *q.get(&id).unwrap_or(&0);
+            let uout: u64 = (0..n).map(|j| (g(u[j].0) as u64) << j).sum();
+            let vout: u64 = (0..n).map(|j| (g(v[j].0) as u64) << j).sum();
+            let dialog_bits: Vec<u8> = dialog.iter().map(|qb| g(qb.0)).collect();
+            let expect = to_bitvector(U512::from(p), U512::from(v0), n)
+                .expect("oracle converges");
+            assert_eq!(uout, 1, "u != 1 for v0={}", v0);
+            assert_eq!(vout, 0, "v != 0 for v0={}", v0);
+            assert_eq!(dialog_bits, expect, "dialog mismatch for v0={}", v0);
+        }
+    }
+}
+
 #[cfg(test)]
 mod oracle_tests {
     use super::*;

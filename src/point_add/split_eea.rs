@@ -276,13 +276,98 @@ fn forward_dialog(b: &mut B, u: &[QubitId], v: &[QubitId], dialog: &[QubitId], i
     }
 }
 
+use super::{mod_add_qq, mod_double_inplace};
+use alloy_primitives::U256;
+
+/// Bezout reconstruction (apply_bitvector): input (u=z, v=0), replays the dialog
+/// in reverse with mod-p ops to produce (u=0, v = x*z mod p), where x is the
+/// integer whose dialog this is. Dialog read non-destructively (emit_absorb twice).
+fn emit_bezout(b: &mut B, u: &[QubitId], v: &[QubitId], dialog: &[QubitId], iters: usize, p: U256) {
+    let n = u.len();
+    for i in (0..iters).rev() {
+        let b0 = b.alloc_qubit();
+        let b0b1 = b.alloc_qubit();
+        let chunk: [QubitId; 5] = [
+            dialog[5 * (i / 3)], dialog[5 * (i / 3) + 1], dialog[5 * (i / 3) + 2],
+            dialog[5 * (i / 3) + 3], dialog[5 * (i / 3) + 4],
+        ];
+        emit_absorb(b, b0, b0b1, &chunk, i % 3); // extract: b0,b0b1 = recorded
+        // v = 2v mod p
+        mod_double_inplace(b, v, p);
+        // if b0: v += u mod p  (load tmp = b0 & u, mod-add, unload)
+        let tmp = b.alloc_qubits(n);
+        for j in 0..n {
+            b.ccx(b0, u[j], tmp[j]);
+        }
+        mod_add_qq(b, v, &tmp, p);
+        for j in 0..n {
+            b.ccx(b0, u[j], tmp[j]);
+        }
+        b.free_vec(&tmp);
+        // if b0b1: swap(u,v)
+        for j in 0..n {
+            kal_cswap(b, b0b1, u[j], v[j]);
+        }
+        emit_absorb(b, b0, b0b1, &chunk, i % 3); // restore: b0,b0b1 -> 0
+        b.free(b0b1);
+        b.free(b0);
+    }
+}
+
+
+
+
+#[cfg(test)]
+mod bezout_tests {
+    use super::*;
+    use super::fwd_tests::simulate;
+    use std::collections::HashMap;
+
+    #[test]
+    fn ipmodmul_n256_via_dialog_and_bezout() {
+        // full inversion+multiply at the real n=256 with secp256k1 p:
+        // forward_dialog on (p, x) -> dialog, (u,v)=(1,0);
+        // emit_bezout on (y, 0) with that dialog -> (0, x*y mod p).
+        let n = 256usize;
+        let p = super::super::SECP256K1_P;
+        let iters = iters_for(n);
+        // a fixed invertible (x,y); x odd not required (we invert via GCD(p,x)=1, p prime)
+        let xs = U512::from_str_radix("9b2c4e7f00112233445566778899aabbccddeeff0123456789abcdef13572468", 16).unwrap();
+        let ys = U512::from_str_radix("0123456789abcdeffedcba98765432100f1e2d3c4b5a69788796a5b4c3d2e1f0", 16).unwrap();
+        let pu = U512::from_le_slice(&{ let mut v=[0u8;64]; v[..32].copy_from_slice(&p.to_le_bytes::<32>()); v });
+        let x = xs % pu; let y = ys % pu;
+        let b = &mut super::super::B::new();
+        let ureg = b.alloc_qubits(n);
+        let vreg = b.alloc_qubits(n);
+        let dlg = b.alloc_qubits(5 * (iters / 3));
+        let zreg = b.alloc_qubits(n);
+        let wreg = b.alloc_qubits(n);
+        forward_dialog(b, &ureg, &vreg, &dlg, iters);
+        emit_bezout(b, &zreg, &wreg, &dlg, iters, p);
+        let mut init: HashMap<u64, u8> = HashMap::new();
+        for j in 0..n {
+            if (pu >> j) & U512::from(1u64) == U512::from(1u64) { init.insert(ureg[j].0, 1); }
+            if (x >> j) & U512::from(1u64) == U512::from(1u64) { init.insert(vreg[j].0, 1); }
+            if (y >> j) & U512::from(1u64) == U512::from(1u64) { init.insert(zreg[j].0, 1); }
+        }
+        let q = simulate(&b.ops, &init);
+        let g = |id: u64| *q.get(&id).unwrap_or(&0) as u128;
+        let read = |reg: &[QubitId]| -> U512 { let mut acc=U512::ZERO; for j in (0..n).rev(){ acc = (acc<<1) | U512::from(g(reg[j].0) as u64);} acc };
+        let uout=read(&ureg); let vout=read(&vreg); let wout=read(&wreg);
+        let expect = (x * y) % pu;
+        assert_eq!(uout, U512::from(1u64), "u (forward result) != 1");
+        assert_eq!(vout, U512::ZERO, "v (forward result) != 0");
+        assert_eq!(wout, expect, "bezout x*y mod p wrong");
+    }
+}
+
 #[cfg(test)]
 mod fwd_tests {
     use super::*;
     use crate::circuit::OperationType;
     use std::collections::HashMap;
 
-    fn simulate(ops: &[crate::circuit::Op], init: &HashMap<u64, u8>) -> HashMap<u64, u8> {
+    pub(super) fn simulate(ops: &[crate::circuit::Op], init: &HashMap<u64, u8>) -> HashMap<u64, u8> {
         let mut q = init.clone();
         let g = |q: &HashMap<u64, u8>, id: u64| *q.get(&id).unwrap_or(&0);
         for op in ops {
@@ -463,3 +548,13 @@ mod tests {
         assert_eq!(outs.len(), 27, "compressed outputs not injective");
     }
 }
+
+
+
+
+
+
+
+
+
+

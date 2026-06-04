@@ -79,3 +79,30 @@ the per-iter b0/b1/cswap/sub/shift logic from kaliski_iteration (close to ToBitV
 Phase 0 validated; full port is a genuine multi-day engineering build with a hard
 9024-shot validation gate, but it is a PORT of published+open-source code, not
 research. This is the only path to a leaderboard-competitive score.
+
+## Phase 3 DONE (correctness) — Phase 4/5 = the performance work
+The full dialog/Bezout inversion+multiply is built and VALIDATED at n=256 in our
+harness (split_eea.rs: emit_gt, forward_dialog, emit_bezout; tests green). It
+computes (x, x*y mod p) exactly. Key debugging lesson: validate against the REAL
+op-stream semantics, and watch for TEST-harness bugs (mod-p prims are n=256-only;
+double-loaded dialog regs; alloc-order qubit-id reuse) — the circuits were right.
+
+MEASURED (exact, non-optimized version): peak 2213 q, 2.89M Toffoli for ONE
+inversion+multiply. NOT competitive yet (frontier whole-circuit = 1446 q / 1.73M T).
+Why, and the remaining performance work (Phase 4/5):
+1. EXACT arithmetic was used so a clean basis-state op-sim is a valid judge
+   (no measurement-based uncompute). The competitive version must use the fast/
+   measurement-based adders (mod_*_fast, Gidney venting) -> ~half the Toffoli and
+   fewer carry qubits. But then the basis-sim can't judge it -> validate via the
+   REAL harness (eval_circuit), which handles measurement correctly.
+2. SPACE: alias the 670-bit dialog into the freed high bits of u/v as they shrink
+   (the paper's trick) instead of a separate register; manage register lifecycle
+   so z/w don't coexist with the forward pass.
+3. Wire a full point-add: lambda = dy/dx via IPModMul.inverse direction
+   (apply_bitvector_reverse), x3 = lambda^2 - x1 - x2, y3 = lambda(x1-x3) - y1;
+   the 4-register contract (tx,ty quantum; ox,oy classical); emit into build();
+   validate all 9024 shots via eval_circuit; measure the real score.
+
+Bottom line: the hard algorithmic core (low-qubit inversion) is proven in-harness.
+The remaining work is the standard performance pass (fast arithmetic + aliasing +
+point-add wiring), validated against eval_circuit not the basis-sim.

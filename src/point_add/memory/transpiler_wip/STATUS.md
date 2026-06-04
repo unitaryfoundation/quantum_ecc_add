@@ -108,3 +108,24 @@ next scoped step.
 Build the transpiler on top of quantum_simulator's op processing (it handles measure/
 reset/realloc correctly) rather than iterate_basic_gates, emitting harness Ops as it
 goes. Validate each component vs qc.simulate (the confirmed oracle).
+
+## UPDATE: flattened IPModMul is salvageable with ordered positions + status tracking
+The earlier "iterate_basic_gates is architecturally insufficient" conclusion was too
+broad for `IPModMul`. The actual bugs in the flattened validator were:
+- It converted `IntIntervalTuple` through `to_set()`, destroying the intentional
+  interleaved register order used by Qarton remaps/dialog registers.
+- It treated measured positions as classical until reset only; Qarton can promote a
+  projected position back to quantum when a later gate structurally uses it as a
+  quantum target.
+
+`flatten_status_validate.py` now mirrors the Qarton quantum/classical status rules
+and preserves tuple order. Validated:
+- 61-bit `IPModMul(2^61-1)`: every top-level segment passes
+  (`ToBitVector`, `ApplyBitVector`, swap, inverse, `Remap`), final phase=0/dirty=0.
+- 127-bit `IPModMul(2^127-1)`: flattened 2,290,705 gates
+  (`465,572` CCX) and passed 1/1 random full-size trial with phase=0/dirty=0.
+
+This reopens a concrete route: transpile Qarton's reusable `IPModMul` and
+`IPModMul.inverse()` into harness ops, then wire the benchmark's arbitrary
+classical-offset affine formula around those blocks instead of trying to use
+Qarton's fixed-window outer point-add circuit directly.

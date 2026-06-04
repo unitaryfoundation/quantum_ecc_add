@@ -549,12 +549,19 @@ mod tests {
     }
 }
 
-
-
-
-
-
-
-
-
-
+#[cfg(test)]
+mod qubit_measure {
+    use super::*;
+    #[test]
+    fn measure_ipmodmul_peak() {
+        let n=256usize; let p=super::super::SECP256K1_P; let iters=iters_for(n);
+        let b=&mut super::super::B::new();
+        let ureg=b.alloc_qubits(n); let vreg=b.alloc_qubits(n); let dlg=b.alloc_qubits(5*(iters/3));
+        let zreg=b.alloc_qubits(n); let wreg=b.alloc_qubits(n);
+        forward_dialog(b,&ureg,&vreg,&dlg,iters);
+        emit_bezout(b,&zreg,&wreg,&dlg,iters,p);
+        let ccx=b.ops.iter().filter(|o|matches!(o.kind,crate::circuit::OperationType::CCX|crate::circuit::OperationType::CCZ)).count();
+        eprintln!("MEASURE dialog IPModMul(n=256): peak_qubits={} total_ops={} toffoli(CCX/CCZ)={} dialog_bits={}",
+            b.peak_qubits, b.ops.len(), ccx, 5*(iters/3));
+    }
+}
